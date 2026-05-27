@@ -23,9 +23,12 @@ SESSION_GUEST_LIST_LOADED = "guest_list_loaded"
 SESSION_GROUP_NAME = "group_name"
 SESSION_GROUP_MODE = "group_mode"
 SESSION_GROUP_LOG = "group_log"
+SESSION_GUIDED_COOLDOWN_UNTIL = "guided_cooldown_until"
+SESSION_ATTACHMENT_BYTES = "attachment_bytes"
 
 # Send modes
 SEND_MODE_QUICK = "quick_send"
+SEND_MODE_GUIDED = "guided_send"
 SEND_MODE_AUTO = "auto_send"
 
 # Group creation modes (same pattern as send modes)

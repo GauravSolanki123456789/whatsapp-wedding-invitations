@@ -31,7 +31,10 @@ from constants import (
     MANUAL_SEND_LOG_FILE,
     MOBILE_NUMBER_COLUMN,
     SEND_MODE_AUTO,
+    SEND_MODE_GUIDED,
     SEND_MODE_QUICK,
+    SESSION_ATTACHMENT_BYTES,
+    SESSION_GUIDED_COOLDOWN_UNTIL,
     SESSION_GROUP_LOG,
     SESSION_GROUP_MODE,
     SESSION_GROUP_NAME,
@@ -59,8 +62,9 @@ from group_contacts import (
     numbers_for_clipboard,
 )
 from guest_store import load_guest_list, save_guest_list
-from hosting import auto_send_available, is_cloud_host
-from wa_links import wa_me_link, whatsapp_web_link
+from guided_send import cooldown_remaining, next_pending_guest, start_cooldown
+from hosting import auto_send_available, default_send_mode
+from wa_links import wa_me_link
 from utils import (
     attachment_size_label,
     count_invalid_numbers,
@@ -83,7 +87,7 @@ def inject_custom_styles() -> None:
     st.markdown(
         """
         <style>
-          @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap');
+          @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:wght@600&display=swap');
 
           :root {
             --brand: #b76e79;
@@ -91,236 +95,154 @@ def inject_custom_styles() -> None:
             --ink: #2c2416;
             --ink-soft: #6b5b52;
             --surface: #ffffff;
-            --surface-muted: #fff9f5;
-            --border: rgba(183, 110, 121, 0.18);
-            --shadow: 0 8px 28px rgba(44, 36, 22, 0.06);
-            --radius-lg: 18px;
-            --radius-md: 14px;
+            --muted: #faf6f3;
+            --border: rgba(183, 110, 121, 0.2);
+            --radius: 16px;
           }
 
-          html, body, [class*="css"] {
-            -webkit-font-smoothing: antialiased;
-          }
+          html, body, [class*="css"] { -webkit-font-smoothing: antialiased; }
 
           .block-container {
-            padding-top: 1.25rem;
-            padding-bottom: 4rem;
-            max-width: 960px;
+            padding-top: 0.75rem;
+            padding-bottom: 3rem;
+            max-width: 720px;
           }
 
           h1, h2, h3, .hero-title, .section-title {
-            font-family: 'Cormorant Garamond', Georgia, serif !important;
-            letter-spacing: 0.02em;
+            font-family: 'Fraunces', Georgia, serif !important;
           }
 
           p, label, .stMarkdown, .stCaption, input, textarea, button {
-            font-family: 'Source Sans 3', sans-serif !important;
+            font-family: 'DM Sans', sans-serif !important;
           }
 
-          #MainMenu, footer, header[data-testid="stHeader"] {
-            visibility: hidden;
-          }
+          #MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; }
 
           .hero-card {
-            background: linear-gradient(135deg, #fff9f5 0%, #f8ece6 55%, #f3e0dc 100%);
+            background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: var(--radius-lg);
-            padding: 1.75rem 1.5rem;
-            margin-bottom: 1.25rem;
-            box-shadow: var(--shadow);
+            border-radius: var(--radius);
+            padding: 1.1rem 1rem;
+            margin-bottom: 0.75rem;
           }
 
           .hero-title {
-            font-size: clamp(1.65rem, 4.5vw, 2.4rem);
+            font-size: clamp(1.35rem, 4vw, 1.75rem);
             color: #5c3d42;
-            margin: 0 0 0.4rem 0;
-            line-height: 1.12;
+            margin: 0 0 0.25rem 0;
+            line-height: 1.15;
           }
 
           .hero-subtitle {
             color: var(--ink-soft);
-            font-size: clamp(0.92rem, 2.6vw, 1.05rem);
+            font-size: 0.92rem;
             margin: 0;
-            line-height: 1.55;
-            max-width: 52ch;
-          }
-
-          .step-progress {
-            display: flex;
-            gap: 0.45rem;
-            flex-wrap: wrap;
-            margin-bottom: 1.25rem;
-          }
-
-          .step-chip {
-            flex: 1 1 auto;
-            min-width: 7rem;
-            text-align: center;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 999px;
-            padding: 0.45rem 0.75rem;
-            font-size: 0.78rem;
-            font-weight: 600;
-            color: #7a6358;
-            letter-spacing: 0.01em;
+            line-height: 1.45;
           }
 
           .section-title {
-            font-size: clamp(1.05rem, 3vw, 1.2rem);
+            font-size: 1.05rem;
             color: #5c3d42;
-            margin: 0 0 0.75rem 0;
+            margin: 0 0 0.65rem 0;
             font-weight: 600;
-          }
-
-          .stat-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.5rem;
-            align-items: center;
-            margin-top: 0.35rem;
           }
 
           .stat-pill {
-            display: inline-flex;
-            align-items: center;
-            background: #f5ede6;
+            display: inline-block;
+            background: var(--muted);
             color: #5c3d42;
             border-radius: 999px;
-            padding: 0.4rem 0.9rem;
-            font-size: 0.84rem;
+            padding: 0.35rem 0.75rem;
+            font-size: 0.82rem;
             font-weight: 600;
+            margin-right: 0.35rem;
           }
 
-          .stat-pill--warn {
-            background: #fde8e8;
-            color: #8b2e2e;
-          }
+          .stat-pill--warn { background: #fde8e8; color: #8b2e2e; }
 
           .notice-box {
-            border-radius: var(--radius-md);
-            padding: 0.9rem 1rem;
-            margin: 0.65rem 0;
-            font-size: 0.91rem;
-            line-height: 1.5;
+            border-radius: 12px;
+            padding: 0.75rem 0.85rem;
+            margin: 0.5rem 0;
+            font-size: 0.88rem;
+            line-height: 1.45;
           }
 
-          .warning-box {
+          .tip-box { background: #f0faf3; border-left: 3px solid #3d9970; color: #2d4a38; }
+          .warning-box { background: #fff8e8; border-left: 3px solid #d4a017; color: #5c4a1a; }
+
+          .focus-card {
+            background: linear-gradient(160deg, #fff9f5 0%, #f8ece6 100%);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.25rem 1rem;
+            text-align: center;
+            margin: 0.75rem 0;
+          }
+
+          .focus-card--wait {
             background: #fff8e8;
-            border-left: 4px solid #d4a017;
-            color: #5c4a1a;
+            border-color: #e8d48a;
           }
 
-          .tip-box {
-            background: #f0faf3;
-            border-left: 4px solid #3d9970;
-            color: #2d4a38;
+          .focus-guest-number {
+            font-size: clamp(1.25rem, 5vw, 1.6rem);
+            font-weight: 700;
+            color: #5c3d42;
+            letter-spacing: 0.02em;
+            margin: 0.35rem 0 0.15rem;
+            word-break: break-all;
           }
 
-          div[data-testid="stVerticalBlockBorderWrapper"] {
-            border-radius: var(--radius-lg) !important;
-            border-color: var(--border) !important;
-            background: var(--surface) !important;
-            box-shadow: 0 4px 16px rgba(44, 36, 22, 0.035);
-            margin-bottom: 1rem;
-            padding: 0.25rem 0.35rem;
+          .focus-meta {
+            color: var(--ink-soft);
+            font-size: 0.88rem;
+            margin: 0;
           }
 
-          .attachment-card {
-            background: var(--surface-muted);
-            border: 1px dashed rgba(183, 110, 121, 0.35);
-            border-radius: var(--radius-md);
-            padding: 0.85rem;
-            margin-top: 0.5rem;
+          .step-list {
+            text-align: left;
+            margin: 0.65rem 0 0;
+            padding-left: 1.1rem;
+            color: var(--ink-soft);
+            font-size: 0.86rem;
+            line-height: 1.55;
           }
 
           div[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #fff9f5 0%, #f5ede6 100%);
+            background: var(--muted);
             border-right: 1px solid var(--border);
           }
 
-          div[data-testid="stSidebar"] .block-container {
-            padding-top: 1.25rem;
+          div[data-testid="stTabs"] button {
+            font-weight: 600 !important;
+            font-size: 0.9rem !important;
           }
 
-          div[data-testid="stSidebar"] h3 {
-            color: #5c3d42;
+          div[data-testid="stVerticalBlockBorderWrapper"] {
+            border-radius: var(--radius) !important;
+            border-color: var(--border) !important;
+            padding: 0.5rem 0.65rem !important;
+            margin-bottom: 0.5rem;
           }
 
           .stButton > button {
             border-radius: 12px !important;
-            min-height: 2.75rem;
+            min-height: 2.85rem;
             font-weight: 600;
-            transition: transform 0.15s ease, box-shadow 0.15s ease;
           }
 
           .stButton > button[kind="primary"] {
-            background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%) !important;
+            background: linear-gradient(135deg, var(--brand), var(--brand-dark)) !important;
             border: none !important;
             color: #fff !important;
-            box-shadow: 0 4px 14px rgba(158, 85, 96, 0.25);
-          }
-
-          .stButton > button[kind="primary"]:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 6px 20px rgba(158, 85, 96, 0.35);
-          }
-
-          .stButton > button[kind="secondary"] {
-            border: 1.5px solid rgba(183, 110, 121, 0.45) !important;
-            color: #5c3d42 !important;
-            background: #fff !important;
-          }
-
-          div[data-testid="stDataEditor"],
-          div[data-testid="stDataFrame"] {
-            border-radius: 12px;
-            overflow: hidden;
-            border: 1px solid var(--border);
-          }
-
-          div[data-testid="stFileUploader"] {
-            border-radius: var(--radius-md);
-          }
-
-          .stTextArea textarea {
-            border-radius: var(--radius-md) !important;
-            border-color: var(--border) !important;
-          }
-
-          .guest-card {
-            background: var(--surface-muted);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-md);
-            padding: 0.85rem 1rem;
-            margin-bottom: 0.65rem;
-          }
-
-          .guest-card--sent {
-            background: #f0faf3;
-            border-color: rgba(61, 153, 112, 0.35);
-          }
-
-          .mode-badge {
-            display: inline-block;
-            background: #f5ede6;
-            color: #5c3d42;
-            border-radius: 999px;
-            padding: 0.25rem 0.65rem;
-            font-size: 0.75rem;
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-          }
-
-          .group-action-row [data-testid="column"] .stDownloadButton > button,
-          .group-action-row [data-testid="column"] .stButton > button {
-            width: 100%;
           }
 
           a[data-testid="stLinkButton"] {
             border-radius: 12px !important;
-            min-height: 2.75rem;
-            font-weight: 600 !important;
+            min-height: 3rem !important;
+            font-weight: 700 !important;
+            font-size: 1rem !important;
           }
 
           div[data-testid="stProgress"] > div {
@@ -330,33 +252,10 @@ def inject_custom_styles() -> None:
 
           @media (max-width: 768px) {
             .block-container {
-              padding-left: 0.85rem;
-              padding-right: 0.85rem;
-              padding-bottom: 5.5rem;
-            }
-
-            .hero-card {
-              padding: 1.25rem 1rem;
-              border-radius: 16px;
-            }
-
-            .step-wrap {
-              padding: 1rem 0.9rem 1.15rem;
-              border-radius: 16px;
-            }
-
-            .step-progress {
-              gap: 0.35rem;
-            }
-
-            .step-chip {
-              min-width: calc(50% - 0.35rem);
-              font-size: 0.72rem;
-              padding: 0.4rem 0.55rem;
-            }
-
-            div[data-testid="stVerticalBlockBorderWrapper"] {
-              padding: 0.15rem 0.2rem;
+              padding-left: 0.65rem;
+              padding-right: 0.65rem;
+              padding-bottom: 4rem;
+              max-width: 100%;
             }
 
             div[data-testid="column"] {
@@ -365,37 +264,17 @@ def inject_custom_styles() -> None:
               min-width: 100% !important;
             }
 
-            div[data-testid="stSidebar"] {
-              min-width: 17rem !important;
+            div[data-testid="stTabs"] [data-baseweb="tab-list"] {
+              gap: 0.25rem;
+              flex-wrap: wrap;
             }
 
-            .stat-row {
-              flex-direction: column;
-              align-items: stretch;
+            div[data-testid="stTabs"] button {
+              padding: 0.45rem 0.65rem !important;
+              min-width: auto !important;
             }
 
-            .stat-pill {
-              justify-content: center;
-            }
-
-            .send-actions [data-testid="column"] .stButton > button {
-              width: 100%;
-            }
-          }
-
-          @media (max-width: 480px) {
-            .hero-title {
-              font-size: 1.55rem;
-            }
-
-            .step-chip {
-              min-width: 100%;
-            }
-
-            .notice-box {
-              font-size: 0.87rem;
-              padding: 0.8rem 0.85rem;
-            }
+            .focus-card { padding: 1rem 0.85rem; }
           }
         </style>
         """,
@@ -428,11 +307,13 @@ def init_session_state() -> None:
         SESSION_GUEST_LIST_LOADED: False,
         SESSION_DELAY_MIN: DELAY_MIN_SECONDS,
         SESSION_DELAY_MAX: DELAY_MAX_SECONDS,
-        SESSION_SEND_MODE: SEND_MODE_QUICK,
+        SESSION_SEND_MODE: default_send_mode(),
         SESSION_MANUAL_SENT: set(),
         SESSION_GROUP_NAME: DEFAULT_GROUP_NAME,
         SESSION_GROUP_MODE: GROUP_MODE_QUICK,
         SESSION_GROUP_LOG: [],
+        SESSION_GUIDED_COOLDOWN_UNTIL: 0,
+        SESSION_ATTACHMENT_BYTES: None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -461,17 +342,7 @@ def render_hero() -> None:
         f"""
         <div class="hero-card">
           <p class="hero-title">{APP_ICON} {APP_TITLE}</p>
-          <p class="hero-subtitle">
-            Upload your guest list, review mobile numbers, compose your invitation,
-            and send personalized WhatsApp messages safely — one guest at a time.
-          </p>
-        </div>
-        <div class="step-progress">
-          <span class="step-chip">1 · Guest list</span>
-          <span class="step-chip">2 · Review numbers</span>
-          <span class="step-chip">3 · Compose</span>
-          <span class="step-chip">4 · Send</span>
-          <span class="step-chip">Group</span>
+          <p class="hero-subtitle">Upload guests · compose · send on phone or laptop.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -507,162 +378,134 @@ def render_sidebar() -> None:
         configure_delays(delay_min, delay_max)
 
         st.markdown("---")
-        st.markdown("**How to send safely**")
         st.caption(
-            f"Optional pause between guests: **{delay_min}–{delay_max}s**. "
-            "Set both to **0** for no extra wait (video upload still takes time)."
-        )
-        st.markdown(
-            """
-            **Quick Send (recommended)**
-            - Works on **phone & laptop**
-            - Tap each guest → WhatsApp opens → attach file → send → back here
-
-            **Create group**
-            - **Quick Group** on phone: import .vcf → New group in WhatsApp
-            - **Auto Group** on laptop: one button in the app
-
-            **Auto Send**
-            - Opens a **separate Chrome window** for WhatsApp (scan QR once)
-            - Run this app in **Edge or Brave**, not Chrome
-            - Keep automation Chrome maximized while sending
-            - Use Quick Send if auto fails
-            """
+            f"Pause between guests: **{delay_min}–{delay_max}s** "
+            "(used in Guided Send to avoid spam flags)."
         )
 
 
 def render_upload_section() -> None:
-    with st.container(border=True):
-        st.markdown('<p class="section-title">1 · Upload guest list</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">Upload guest list</p>', unsafe_allow_html=True)
 
-        uploaded_file = st.file_uploader(
-            "Choose an Excel file (.xlsx)",
-            type=["xlsx"],
-            key=f"upload_{st.session_state[SESSION_FILE_UPLOAD_KEY]}",
-            help="The app reads **column 2 only** (mobile numbers). Column 1 (names) is ignored.",
-        )
+    uploaded_file = st.file_uploader(
+        "Choose an Excel file (.xlsx)",
+        type=["xlsx"],
+        key=f"upload_{st.session_state[SESSION_FILE_UPLOAD_KEY]}",
+        help="Column 2 = mobile numbers. Column 1 is ignored.",
+    )
 
-        if uploaded_file is not None:
-            try:
-                guest_list = extract_mobile_numbers_from_excel(
-                    uploaded_file.getvalue(),
-                    st.session_state[SESSION_COUNTRY_CODE],
-                )
-                st.session_state[SESSION_GUEST_LIST] = guest_list
-                save_guest_list(guest_list)
-                count = len(guest_list)
-                if count:
-                    st.success(f"Loaded **{count}** mobile number{'s' if count != 1 else ''} from column 2.")
-                else:
-                    st.warning("No valid mobile numbers found in column 2. Check your file and country code.")
-            except Exception as exc:
-                st.error(f"Could not read the Excel file: {exc}")
+    if uploaded_file is not None:
+        try:
+            guest_list = extract_mobile_numbers_from_excel(
+                uploaded_file.getvalue(),
+                st.session_state[SESSION_COUNTRY_CODE],
+            )
+            st.session_state[SESSION_GUEST_LIST] = guest_list
+            save_guest_list(guest_list)
+            count = len(guest_list)
+            if count:
+                st.success(f"Loaded **{count}** number{'s' if count != 1 else ''}.")
+            else:
+                st.warning("No valid numbers in column 2.")
+        except Exception as exc:
+            st.error(f"Could not read the Excel file: {exc}")
 
 
 def render_guest_editor() -> None:
-    with st.container(border=True):
-        st.markdown('<p class="section-title">2 · Review & edit numbers</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">Review numbers</p>', unsafe_allow_html=True)
 
-        guest_list: pd.DataFrame = st.session_state[SESSION_GUEST_LIST]
-        if guest_list.empty:
-            st.info("Upload an Excel file to populate the guest list, or add numbers manually below.")
-            guest_list = pd.DataFrame({MOBILE_NUMBER_COLUMN: [""]})
+    guest_list: pd.DataFrame = st.session_state[SESSION_GUEST_LIST]
+    if guest_list.empty:
+        st.info("Upload Excel or add numbers below.")
+        guest_list = pd.DataFrame({MOBILE_NUMBER_COLUMN: [""]})
 
-        edited_guest_list = st.data_editor(
-            guest_list,
-            num_rows="dynamic",
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                MOBILE_NUMBER_COLUMN: st.column_config.TextColumn(
-                    "Mobile number",
-                    help="Include country code, e.g. +919876543210",
-                    required=True,
-                    width="large",
-                ),
-            },
-            key="guest_data_editor",
-        )
+    edited_guest_list = st.data_editor(
+        guest_list,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            MOBILE_NUMBER_COLUMN: st.column_config.TextColumn(
+                "Mobile number",
+                help="Include country code, e.g. +919876543210",
+                required=True,
+                width="large",
+            ),
+        },
+        key="guest_data_editor",
+    )
 
-        st.session_state[SESSION_GUEST_LIST] = edited_guest_list
-        save_guest_list(edited_guest_list)
+    st.session_state[SESSION_GUEST_LIST] = edited_guest_list
+    save_guest_list(edited_guest_list)
 
-        finalized_numbers = guest_list_from_dataframe(edited_guest_list)
-        invalid_count = count_invalid_numbers(finalized_numbers)
+    finalized_numbers = guest_list_from_dataframe(edited_guest_list)
+    invalid_count = count_invalid_numbers(finalized_numbers)
 
-        st.markdown(
-            f"""
-            <div class="stat-row">
-              <span class="stat-pill">{len(finalized_numbers)} guests</span>
-              {f'<span class="stat-pill stat-pill--warn">{invalid_count} invalid</span>' if invalid_count else ''}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        f'<span class="stat-pill">{len(finalized_numbers)} guests</span>'
+        + (
+            f' <span class="stat-pill stat-pill--warn">{invalid_count} invalid</span>'
+            if invalid_count
+            else ""
+        ),
+        unsafe_allow_html=True,
+    )
 
-        if st.button("Clear list", use_container_width=True):
-            st.session_state[SESSION_GUEST_LIST] = pd.DataFrame(columns=[MOBILE_NUMBER_COLUMN])
-            st.session_state[SESSION_FILE_UPLOAD_KEY] += 1
-            save_guest_list(st.session_state[SESSION_GUEST_LIST])
-            st.rerun()
+    if st.button("Clear list", use_container_width=True):
+        st.session_state[SESSION_GUEST_LIST] = pd.DataFrame(columns=[MOBILE_NUMBER_COLUMN])
+        st.session_state[SESSION_FILE_UPLOAD_KEY] += 1
+        save_guest_list(st.session_state[SESSION_GUEST_LIST])
+        st.rerun()
 
 
 def render_group_section() -> None:
-    with st.container(border=True):
-        st.markdown('<p class="section-title">Create WhatsApp group</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">WhatsApp group</p>', unsafe_allow_html=True)
 
-        mobile_numbers = collect_mobile_numbers()
-        guest_count = len(mobile_numbers)
-        invalid_count = count_invalid_numbers(mobile_numbers)
+    mobile_numbers = collect_mobile_numbers()
+    guest_count = len(mobile_numbers)
+    invalid_count = count_invalid_numbers(mobile_numbers)
 
-        st.markdown(
-            f"""
-            <div class="stat-row">
-              <span class="stat-pill">{guest_count} guests for group</span>
-              {f'<span class="stat-pill stat-pill--warn">{invalid_count} invalid</span>' if invalid_count else ''}
-            </div>
-            """,
-            unsafe_allow_html=True,
+    st.markdown(
+        f'<span class="stat-pill">{guest_count} guests</span>',
+        unsafe_allow_html=True,
+    )
+
+    group_name = st.text_input(
+        "Group name",
+        value=st.session_state.get(SESSION_GROUP_NAME, DEFAULT_GROUP_NAME),
+        placeholder="e.g. Chandana's Wedding Guests",
+    )
+    st.session_state[SESSION_GROUP_NAME] = group_name
+
+    group_options = [GROUP_MODE_QUICK]
+    if auto_send_available():
+        group_options.append(GROUP_MODE_AUTO)
+
+    if len(group_options) == 1:
+        group_mode = GROUP_MODE_QUICK
+    else:
+        group_mode = st.radio(
+            "How to create the group",
+            options=group_options,
+            format_func=lambda value: (
+                "Quick Group — import contacts on phone (recommended)"
+                if value == GROUP_MODE_QUICK
+                else "Auto Group — Chrome automation (laptop only)"
+            ),
+            horizontal=False,
+            key=SESSION_GROUP_MODE,
         )
 
-        group_name = st.text_input(
-            "Group name",
-            value=st.session_state.get(SESSION_GROUP_NAME, DEFAULT_GROUP_NAME),
-            placeholder="e.g. Chandana's Wedding Guests",
-            help="Shown as the WhatsApp group title.",
+    if guest_count > WHATSAPP_MAX_GROUP_PARTICIPANTS:
+        st.warning(
+            f"Max **{WHATSAPP_MAX_GROUP_PARTICIPANTS}** members per group. "
+            f"You have **{guest_count}** guests."
         )
-        st.session_state[SESSION_GROUP_NAME] = group_name
 
-        group_options = [GROUP_MODE_QUICK]
-        if auto_send_available():
-            group_options.append(GROUP_MODE_AUTO)
-
-        if len(group_options) == 1:
-            group_mode = GROUP_MODE_QUICK
-            st.caption("Quick Group works on phone and laptop (recommended).")
-        else:
-            group_mode = st.radio(
-                "How to create the group",
-                options=group_options,
-                format_func=lambda value: (
-                    "Quick Group — import contacts on phone, then one tap in WhatsApp (recommended)"
-                    if value == GROUP_MODE_QUICK
-                    else "Auto Group — create in Chrome automatically (laptop only)"
-                ),
-                horizontal=False,
-                key=SESSION_GROUP_MODE,
-            )
-
-        if guest_count > WHATSAPP_MAX_GROUP_PARTICIPANTS:
-            st.warning(
-                f"WhatsApp allows up to **{WHATSAPP_MAX_GROUP_PARTICIPANTS}** members per group. "
-                f"You have **{guest_count}** guests — remove some or create two groups."
-            )
-
-        if group_mode == GROUP_MODE_QUICK:
-            render_quick_group_panel(mobile_numbers, group_name, invalid_count)
-        else:
-            render_auto_group_panel(mobile_numbers, group_name, invalid_count, guest_count)
+    if group_mode == GROUP_MODE_QUICK:
+        render_quick_group_panel(mobile_numbers, group_name, invalid_count)
+    else:
+        render_auto_group_panel(mobile_numbers, group_name, invalid_count, guest_count)
 
 
 def render_quick_group_panel(
@@ -671,16 +514,10 @@ def render_quick_group_panel(
     invalid_count: int,
 ) -> None:
     st.markdown(
-        '<span class="mode-badge">Works on phone & laptop · most reliable</span>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
         """
         <div class="notice-box tip-box">
-          <strong>On your phone (3 steps):</strong><br>
-          1. Download <em>guest contacts</em> below and open the file — tap Import.<br>
-          2. Open WhatsApp → <strong>New group</strong> → search <strong>Wedding Guest</strong> → select all.<br>
-          3. Set the group name and tap <strong>Create</strong>.
+          <strong>Phone:</strong> download contacts → import → WhatsApp → New group →
+          select <em>Wedding Guest</em> → create.
         </div>
         """,
         unsafe_allow_html=True,
@@ -698,37 +535,20 @@ def render_quick_group_panel(
     vcard_bytes = build_guest_vcard(mobile_numbers).encode("utf-8")
     clipboard_text = numbers_for_clipboard(mobile_numbers)
 
-    st.markdown('<div class="group-action-row">', unsafe_allow_html=True)
-    col_vcard, col_copy = st.columns(2)
-    with col_vcard:
-        st.download_button(
-            label="Download guest contacts (.vcf)",
-            data=vcard_bytes,
-            file_name="wedding_guest_contacts.vcf",
-            mime="text/vcard",
-            use_container_width=True,
-            help="Import on iPhone or Android, then add all Wedding Guest contacts to a new group.",
-        )
-    with col_copy:
-        st.download_button(
-            label="Download number list (.txt)",
-            data=clipboard_text.encode("utf-8"),
-            file_name="guest_numbers.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    with st.expander("Copy all numbers here", expanded=False):
-        st.text_area(
-            "Guest numbers",
-            value=clipboard_text,
-            height=120,
-            label_visibility="collapsed",
-        )
-        st.caption("Long-press to select all on phone, or use the .txt download above.")
-
-    st.caption(f"Suggested group name: **{group_name.strip() or DEFAULT_GROUP_NAME}**")
+    st.download_button(
+        label="Download guest contacts (.vcf)",
+        data=vcard_bytes,
+        file_name="wedding_guest_contacts.vcf",
+        mime="text/vcard",
+        use_container_width=True,
+    )
+    st.download_button(
+        label="Download number list (.txt)",
+        data=clipboard_text.encode("utf-8"),
+        file_name="guest_numbers.txt",
+        mime="text/plain",
+        use_container_width=True,
+    )
 
 
 def render_auto_group_panel(
@@ -837,6 +657,31 @@ def reset_manual_progress() -> None:
     save_manual_sent_numbers(set())
 
 
+def get_attachment_download_data() -> tuple[bytes | None, str | None]:
+    name = st.session_state.get(SESSION_ATTACHMENT_NAME)
+    bytes_data = st.session_state.get(SESSION_ATTACHMENT_BYTES)
+    if bytes_data:
+        return bytes_data, name
+    attachment_path = st.session_state.get(SESSION_ATTACHMENT_PATH)
+    if attachment_path and os.path.exists(attachment_path):
+        with open(attachment_path, "rb") as file_handle:
+            return file_handle.read(), name
+    return None, name
+
+
+def render_attachment_download_button(label: str = "Save video on phone (use once per guest)") -> None:
+    data, name = get_attachment_download_data()
+    if not data or not name:
+        return
+    st.download_button(
+        label=label,
+        data=data,
+        file_name=name,
+        mime="application/octet-stream",
+        use_container_width=True,
+    )
+
+
 def validate_before_send(mobile_numbers: list[str], message: str, attachment_path: str | None) -> bool:
     invalid_count = count_invalid_numbers(mobile_numbers)
     if not mobile_numbers:
@@ -848,13 +693,18 @@ def validate_before_send(mobile_numbers: list[str], message: str, attachment_pat
             "Each number must include a country code, e.g. +919876543210."
         )
         return False
-    if not message and not attachment_path:
-        st.error("Please write a message or attach a file before sending.")
+    has_attachment = bool(st.session_state.get(SESSION_ATTACHMENT_BYTES)) or (
+        attachment_path and os.path.exists(attachment_path)
+    )
+    if not message and not has_attachment:
+        st.error("Write a message or attach a file in the **Compose** tab first.")
         return False
-    if attachment_path and not os.path.exists(attachment_path):
-        st.error("The attached file could not be found. Please upload it again.")
+    if attachment_path and not os.path.exists(attachment_path) and not st.session_state.get(
+        SESSION_ATTACHMENT_BYTES
+    ):
+        st.error("Attachment missing — upload again in **Compose**.")
         return False
-    if attachment_path:
+    if attachment_path and os.path.exists(attachment_path):
         size_error = validate_attachment_for_whatsapp(attachment_path)
         if size_error:
             st.error(size_error)
@@ -871,6 +721,7 @@ def save_attachment(uploaded_file) -> str:
     with open(attachment_path, "wb") as file_handle:
         file_handle.write(uploaded_file.getbuffer())
 
+    st.session_state[SESSION_ATTACHMENT_BYTES] = bytes(uploaded_file.getbuffer())
     return attachment_path
 
 
@@ -878,6 +729,7 @@ def remove_current_attachment() -> None:
     """Clear the active attachment from session state and persisted storage."""
     st.session_state[SESSION_ATTACHMENT_PATH] = None
     st.session_state[SESSION_ATTACHMENT_NAME] = None
+    st.session_state[SESSION_ATTACHMENT_BYTES] = None
     clear_last_compose_attachment()
 
 
@@ -895,131 +747,185 @@ def render_attachment_preview(attachment_path: str, attachment_name: str) -> Non
 
 
 def render_message_section() -> None:
-    with st.container(border=True):
-        st.markdown('<p class="section-title">3 · Compose invitation</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">Invitation</p>', unsafe_allow_html=True)
 
-        message = st.text_area(
-            "Invitation message",
-            value=st.session_state[SESSION_MESSAGE],
-            height=180,
-            placeholder="Type your wedding invitation message here…",
-            help="This text is sent with every invitation. With an attachment, it becomes the caption.",
-        )
-        st.session_state[SESSION_MESSAGE] = message
+    message = st.text_area(
+        "Message",
+        value=st.session_state[SESSION_MESSAGE],
+        height=140,
+        placeholder="Your wedding invitation text…",
+        label_visibility="collapsed",
+    )
+    st.session_state[SESSION_MESSAGE] = message
+    st.caption(f"{len(message)} characters")
 
-        st.caption(f"{len(message)} characters")
+    attachment_file = st.file_uploader(
+        "Attach video or photo (optional)",
+        type=ALLOWED_ATTACHMENT_TYPES,
+        key="invitation_attachment",
+    )
 
-        st.markdown("**Attach a file (optional)**")
-        attachment_file = st.file_uploader(
-            "Invitation attachment",
-            type=ALLOWED_ATTACHMENT_TYPES,
-            key="invitation_attachment",
-            help="PDF, images, or video (MP4, MOV, etc.). Sent with your message. Leave empty for text only.",
-            label_visibility="collapsed",
-        )
-
-        if attachment_file is not None:
-            attachment_path = save_attachment(attachment_file)
-            st.session_state[SESSION_ATTACHMENT_PATH] = attachment_path
-            st.session_state[SESSION_ATTACHMENT_NAME] = attachment_file.name
-
-            st.markdown('<div class="attachment-card">', unsafe_allow_html=True)
-            col_preview, col_info = st.columns([1, 1.4])
-            with col_preview:
-                render_attachment_preview(attachment_path, attachment_file.name)
-            with col_info:
-                st.success(f"Attached: **{attachment_file.name}**")
-                st.caption(
-                    f"Size: **{attachment_size_label(attachment_path)}** · "
-                    "This file will be sent with every invitation."
-                )
-                size_error = validate_attachment_for_whatsapp(attachment_path)
-                if size_error:
-                    st.error(size_error)
-                if st.button("Remove attachment", key="remove_attachment", use_container_width=True):
-                    remove_current_attachment()
-                    st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
-        elif st.session_state.get(SESSION_ATTACHMENT_PATH) and st.session_state.get(
-            SESSION_ATTACHMENT_NAME
-        ):
-            attachment_path = st.session_state[SESSION_ATTACHMENT_PATH]
-            attachment_name = st.session_state[SESSION_ATTACHMENT_NAME]
-
-            if os.path.exists(attachment_path):
-                st.markdown('<div class="attachment-card">', unsafe_allow_html=True)
-                col_preview, col_info = st.columns([1, 1.4])
-                with col_preview:
-                    render_attachment_preview(attachment_path, attachment_name)
-                with col_info:
-                    st.info(f"Last attachment: **{attachment_name}**")
-                    st.caption(
-                        f"Size: **{attachment_size_label(attachment_path)}** · "
-                        "Restored from your last sent invitation."
-                    )
-                    size_error = validate_attachment_for_whatsapp(attachment_path)
-                    if size_error:
-                        st.error(size_error)
-                    if st.button("Remove attachment", key="remove_saved_attachment", use_container_width=True):
-                        remove_current_attachment()
-                        st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
-            else:
-                st.warning("The saved attachment file is missing. Please upload it again.")
-                remove_current_attachment()
+    if attachment_file is not None:
+        attachment_path = save_attachment(attachment_file)
+        st.session_state[SESSION_ATTACHMENT_PATH] = attachment_path
+        st.session_state[SESSION_ATTACHMENT_NAME] = attachment_file.name
+        st.success(f"Attached: **{attachment_file.name}** ({attachment_size_label(attachment_path)})")
+        size_error = validate_attachment_for_whatsapp(attachment_path)
+        if size_error:
+            st.error(size_error)
+        if st.button("Remove attachment", key="remove_attachment"):
+            remove_current_attachment()
+            st.rerun()
+    elif st.session_state.get(SESSION_ATTACHMENT_NAME):
+        name = st.session_state[SESSION_ATTACHMENT_NAME]
+        path = st.session_state.get(SESSION_ATTACHMENT_PATH)
+        if path and os.path.exists(path):
+            st.info(f"Saved attachment: **{name}** ({attachment_size_label(path)})")
+        elif st.session_state.get(SESSION_ATTACHMENT_BYTES):
+            st.info(f"Attached: **{name}**")
+        if st.button("Remove attachment", key="remove_saved_attachment"):
+            remove_current_attachment()
+            st.rerun()
 
 
 def render_send_section() -> None:
-    with st.container(border=True):
-        st.markdown('<p class="section-title">4 · Send invitations</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">Send</p>', unsafe_allow_html=True)
 
-        message = st.session_state[SESSION_MESSAGE].strip()
-        attachment_name = st.session_state.get(SESSION_ATTACHMENT_NAME)
-        attachment_path = st.session_state.get(SESSION_ATTACHMENT_PATH)
-        mobile_numbers = collect_mobile_numbers()
-        guest_count = len(mobile_numbers)
-        sent_manual = st.session_state.get(SESSION_MANUAL_SENT, set())
+    message = st.session_state[SESSION_MESSAGE].strip()
+    attachment_name = st.session_state.get(SESSION_ATTACHMENT_NAME)
+    attachment_path = st.session_state.get(SESSION_ATTACHMENT_PATH)
+    mobile_numbers = collect_mobile_numbers()
+    guest_count = len(mobile_numbers)
+    sent_manual = st.session_state.get(SESSION_MANUAL_SENT, set())
 
-        if is_cloud_host():
-            st.success("You are on the hosted app — use **Quick Send** below. It works on phone and laptop.")
+    send_options = [SEND_MODE_GUIDED, SEND_MODE_QUICK]
+    if auto_send_available():
+        send_options.append(SEND_MODE_AUTO)
 
-        send_options = [SEND_MODE_QUICK]
-        if auto_send_available():
-            send_options.append(SEND_MODE_AUTO)
+    send_mode = st.radio(
+        "Send mode",
+        options=send_options,
+        format_func=lambda value: {
+            SEND_MODE_GUIDED: "Guided Send — one guest at a time with pause (best on phone)",
+            SEND_MODE_QUICK: "Quick Send — see full guest list",
+            SEND_MODE_AUTO: "Auto Send — full Chrome automation (laptop only)",
+        }[value],
+        horizontal=False,
+        key=SESSION_SEND_MODE,
+    )
 
-        if len(send_options) == 1:
-            send_mode = SEND_MODE_QUICK
-            st.caption("Quick Send is active (best for hosted & mobile use).")
-        else:
-            send_mode = st.radio(
-                "Choose send method",
-                options=send_options,
-                format_func=lambda value: (
-                    "Quick Send — tap each guest (recommended · phone & laptop)"
-                    if value == SEND_MODE_QUICK
-                    else "Auto Send — full automation (laptop only · experimental)"
-                ),
-                horizontal=False,
-                key=SESSION_SEND_MODE,
-            )
+    if send_mode == SEND_MODE_GUIDED:
+        render_guided_send_panel(
+            mobile_numbers=mobile_numbers,
+            message=message,
+            attachment_name=attachment_name,
+            attachment_path=attachment_path,
+            sent_manual=sent_manual,
+            guest_count=guest_count,
+        )
+    elif send_mode == SEND_MODE_QUICK:
+        render_quick_send_panel(
+            mobile_numbers=mobile_numbers,
+            message=message,
+            attachment_name=attachment_name,
+            attachment_path=attachment_path,
+            sent_manual=sent_manual,
+            guest_count=guest_count,
+        )
+    else:
+        render_auto_send_panel(
+            mobile_numbers=mobile_numbers,
+            message=message,
+            attachment_name=attachment_name,
+            attachment_path=attachment_path,
+            guest_count=guest_count,
+        )
 
-        if send_mode == SEND_MODE_QUICK:
-            render_quick_send_panel(
-                mobile_numbers=mobile_numbers,
-                message=message,
-                attachment_name=attachment_name,
-                attachment_path=attachment_path,
-                sent_manual=sent_manual,
-                guest_count=guest_count,
-            )
-        else:
-            render_auto_send_panel(
-                mobile_numbers=mobile_numbers,
-                message=message,
-                attachment_name=attachment_name,
-                attachment_path=attachment_path,
-                guest_count=guest_count,
-            )
+
+def render_guided_send_panel(
+    mobile_numbers: list[str],
+    message: str,
+    attachment_name: str | None,
+    attachment_path: str | None,
+    sent_manual: set[str],
+    guest_count: int,
+) -> None:
+    if not mobile_numbers:
+        st.warning("Add guests in the **Guests** tab first.")
+        return
+
+    if not validate_before_send(mobile_numbers, message, attachment_path):
+        return
+
+    delay_min = int(st.session_state[SESSION_DELAY_MIN])
+    delay_max = int(st.session_state[SESSION_DELAY_MAX])
+    wait_seconds = cooldown_remaining(st.session_state)
+
+    if wait_seconds > 0:
+        st.markdown(
+            f"""
+            <div class="focus-card focus-card--wait">
+              <p class="focus-meta">Anti-spam pause</p>
+              <p class="focus-guest-number">{wait_seconds}s</p>
+              <p class="focus-meta">Next guest unlocks automatically…</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.progress(1 - wait_seconds / max(delay_max, 1))
+        time.sleep(1)
+        st.rerun()
+        return
+
+    number, position, pending, total = next_pending_guest(mobile_numbers, sent_manual)
+    sent_count = total - pending
+
+    if not number:
+        st.success(f"All done — **{sent_count}** invitation{'s' if sent_count != 1 else ''} sent.")
+        if st.button("Reset progress", use_container_width=True):
+            reset_manual_progress()
+            st.session_state[SESSION_GUIDED_COOLDOWN_UNTIL] = 0
+            st.rerun()
+        return
+
+    st.progress(sent_count / total if total else 0, text=f"{sent_count} of {total} sent")
+
+    st.markdown(
+        f"""
+        <div class="focus-card">
+          <p class="focus-meta">Guest {position} of {total}</p>
+          <p class="focus-guest-number">{number}</p>
+          <ol class="step-list">
+            <li>Tap <strong>Open WhatsApp</strong> below</li>
+            <li>Attach your video (📎) if needed → Send</li>
+            <li>Return here → tap <strong>Done, next guest</strong></li>
+          </ol>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if attachment_name:
+        st.caption(f"Attachment: **{attachment_name}**")
+        render_attachment_download_button()
+
+    st.link_button(
+        "Open WhatsApp",
+        wa_me_link(number, message),
+        use_container_width=True,
+    )
+
+    if st.button("Done — next guest", type="primary", use_container_width=True, key="guided_next"):
+        mark_manual_sent(number)
+        if pending > 1 and (delay_min > 0 or delay_max > 0):
+            pause = start_cooldown(st.session_state, delay_min, delay_max)
+            st.toast(f"Pause {int(pause)}s before next guest")
+        st.rerun()
+
+    if st.button("Reset progress", use_container_width=True):
+        reset_manual_progress()
+        st.session_state[SESSION_GUIDED_COOLDOWN_UNTIL] = 0
+        st.rerun()
 
 
 def render_quick_send_panel(
@@ -1030,81 +936,35 @@ def render_quick_send_panel(
     sent_manual: set[str],
     guest_count: int,
 ) -> None:
-    st.markdown('<span class="mode-badge">Works on phone & laptop · most reliable</span>', unsafe_allow_html=True)
-
-    st.markdown(
-        """
-        <div class="notice-box tip-box">
-          <strong>How Quick Send works:</strong> Tap <em>Open WhatsApp</em> for each guest.
-          Your message is pre-filled. Attach your video/photo once in WhatsApp (📎), tap Send,
-          then come back here for the next guest. Perfect for mobile — no automation needed.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    if attachment_path and os.path.exists(attachment_path):
-        st.caption(f"Attachment for every guest: **{attachment_name}** ({attachment_size_label(attachment_path)})")
-        with open(attachment_path, "rb") as file_handle:
-            st.download_button(
-                label="Download attachment (save on phone once, reuse for each guest)",
-                data=file_handle.read(),
-                file_name=attachment_name or "invitation_attachment",
-                mime="application/octet-stream",
-                use_container_width=True,
-            )
-
     if not mobile_numbers:
-        st.warning("Add guest numbers in step 2 first.")
+        st.warning("Add guests in the **Guests** tab first.")
         return
 
     if not validate_before_send(mobile_numbers, message, attachment_path):
         return
 
+    if attachment_name:
+        render_attachment_download_button("Save attachment on phone")
+
     sent_count = sum(1 for number in mobile_numbers if number in sent_manual)
-    st.progress(sent_count / guest_count if guest_count else 0, text=f"Sent manually: {sent_count} of {guest_count}")
+    st.progress(sent_count / guest_count if guest_count else 0, text=f"{sent_count} of {guest_count} sent")
 
-    col_reset, col_stats = st.columns(2)
-    with col_reset:
-        if st.button("Reset progress", use_container_width=True):
-            reset_manual_progress()
-            st.rerun()
-    with col_stats:
-        st.caption(f"✅ {sent_count} done · ⏳ {guest_count - sent_count} remaining")
-
-    for index, mobile_number in enumerate(mobile_numbers, start=1):
-        is_sent = mobile_number in sent_manual
-        card_class = "guest-card guest-card--sent" if is_sent else "guest-card"
-        st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
-
-        label_col, action_col = st.columns([1.2, 1])
-        with label_col:
-            status = "✅ Sent" if is_sent else f"Guest {index}"
-            st.markdown(f"**{status}** · `{mobile_number}`")
-
-        with action_col:
-            link = wa_me_link(mobile_number, message)
-            st.link_button(
-                "Open WhatsApp",
-                link,
-                use_container_width=True,
-                help="Opens WhatsApp app on phone or WhatsApp Web on laptop",
-            )
-
-        btn_col1, btn_col2 = st.columns(2)
-        with btn_col1:
-            if not is_sent and st.button("Mark as sent", key=f"mark_sent_{mobile_number}", use_container_width=True):
+    with st.expander(f"All guests ({guest_count})", expanded=False):
+        for index, mobile_number in enumerate(mobile_numbers, start=1):
+            is_sent = mobile_number in sent_manual
+            status = "✅" if is_sent else str(index)
+            col_a, col_b = st.columns([1.4, 1])
+            with col_a:
+                st.markdown(f"{status} `{mobile_number}`")
+            with col_b:
+                st.link_button("Open", wa_me_link(mobile_number, message), use_container_width=True)
+            if not is_sent and st.button("Mark sent", key=f"mark_sent_{mobile_number}", use_container_width=True):
                 mark_manual_sent(mobile_number)
                 st.rerun()
-        with btn_col2:
-            st.link_button(
-                "Open in browser",
-                whatsapp_web_link(mobile_number, message),
-                use_container_width=True,
-                help="WhatsApp Web link for laptop",
-            )
 
-        st.markdown("</div>", unsafe_allow_html=True)
+    if st.button("Reset progress", use_container_width=True):
+        reset_manual_progress()
+        st.rerun()
 
 
 def render_auto_send_panel(
@@ -1293,8 +1153,8 @@ def main() -> None:
     st.set_page_config(
         page_title=APP_TITLE,
         page_icon=APP_ICON,
-        layout="wide",
-        initial_sidebar_state="auto",
+        layout="centered",
+        initial_sidebar_state="collapsed",
     )
 
     inject_custom_styles()
@@ -1303,23 +1163,27 @@ def main() -> None:
     render_sidebar()
     render_hero()
 
-    with st.container():
-        render_upload_section()
+    tab_guests, tab_compose, tab_send, tab_group = st.tabs(["Guests", "Compose", "Send", "Group"])
 
-    with st.container():
-        render_guest_editor()
+    with tab_guests:
+        with st.container(border=True):
+            render_upload_section()
+            st.divider()
+            render_guest_editor()
 
-    with st.container():
-        render_group_section()
+    with tab_compose:
+        with st.container(border=True):
+            render_message_section()
 
-    with st.container():
-        render_message_section()
+    with tab_send:
+        with st.container(border=True):
+            render_send_section()
+        render_send_log()
 
-    with st.container():
-        render_send_section()
-
-    render_send_log()
-    render_group_log()
+    with tab_group:
+        with st.container(border=True):
+            render_group_section()
+        render_group_log()
 
 
 if __name__ == "__main__":

@@ -49,6 +49,17 @@ Quick summary:
 
 Wrap your hosted URL in a WebView app (Android Studio / Capacitor). Point the WebView to your hosted Streamlit URL. Quick Send buttons will open the WhatsApp app on the phone.
 
+## Send on phone (hosted app)
+
+**Guided Send** (default on hosted app) is the closest thing to automation on mobile:
+
+1. Open the **Send** tab → **Guided Send**
+2. Tap **Open WhatsApp** for the current guest
+3. Attach your video in WhatsApp → Send → return here
+4. Tap **Done — next guest** — the app waits **3–5s** (adjust in Settings) before the next guest
+
+True full automation (video attach + send) only works on **Auto Send** with a local Windows laptop — not on Streamlit Cloud or inside the phone browser.
+
 ## Create WhatsApp group
 
 After uploading your guest list, use **Create WhatsApp group** (below step 2):

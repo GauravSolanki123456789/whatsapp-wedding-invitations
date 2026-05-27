@@ -19,3 +19,10 @@ def is_cloud_host() -> bool:
 def auto_send_available() -> bool:
     """Chrome automation only works on a local Windows machine."""
     return platform.system() == "Windows" and not is_cloud_host()
+
+
+def default_send_mode() -> str:
+    """Guided Send on hosted/mobile-friendly deploys; Quick Send locally."""
+    from constants import SEND_MODE_GUIDED, SEND_MODE_QUICK
+
+    return SEND_MODE_GUIDED if is_cloud_host() else SEND_MODE_QUICK
