@@ -49,14 +49,26 @@ Quick summary:
 
 Wrap your hosted URL in a WebView app (Android Studio / Capacitor). Point the WebView to your hosted Streamlit URL. Quick Send buttons will open the WhatsApp app on the phone.
 
+## Create WhatsApp group
+
+After uploading your guest list, use **Create WhatsApp group** (below step 2):
+
+- **Quick Group (phone & laptop)** — Download `wedding_guest_contacts.vcf`, import on your phone, then WhatsApp → New group → select all **Wedding Guest** contacts. Works reliably on mobile.
+- **Auto Group (laptop only)** — One button creates the group in automation Chrome (same window as Auto Send). Numbers must be findable in WhatsApp search.
+
+WhatsApp allows up to **256** members when creating a group.
+
 ## Auto Send (laptop only)
 
-Uses Chrome automation for fully automatic sending with attachments. Experimental — if it fails, use **Quick Send**.
+Uses a **separate Chrome window** (your normal Chrome stays open) to send messages and attachments automatically.
+
+**First time:** scan the QR code in the automation Chrome window with your phone. You stay logged in after that.
 
 Before auto send:
-- Close all other WhatsApp Web tabs
-- Keep the automation Chrome window maximized
+- Run the app in **Edge or Brave** (not Chrome)
+- Keep the automation Chrome window **maximized and visible**
 - Video must be under 100 MB
+- If it fails, use **Quick Send** (always works)
 
 ## Guest list Excel format
 

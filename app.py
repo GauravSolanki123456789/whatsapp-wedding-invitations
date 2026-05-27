@@ -21,14 +21,21 @@ from constants import (
     ALLOWED_ATTACHMENT_TYPES,
     ATTACHMENT_FOLDER,
     DEFAULT_COUNTRY_CODE,
+    DEFAULT_GROUP_NAME,
     DELAY_MAX_SECONDS,
     DELAY_MIN_SECONDS,
     DOCUMENT_EXTENSIONS,
+    GROUP_MODE_AUTO,
+    GROUP_MODE_QUICK,
     IMAGE_EXTENSIONS,
     MANUAL_SEND_LOG_FILE,
     MOBILE_NUMBER_COLUMN,
     SEND_MODE_AUTO,
     SEND_MODE_QUICK,
+    SESSION_GROUP_LOG,
+    SESSION_GROUP_MODE,
+    SESSION_GROUP_NAME,
+    WHATSAPP_MAX_GROUP_PARTICIPANTS,
     SESSION_ATTACHMENT_NAME,
     SESSION_ATTACHMENT_PATH,
     SESSION_COMPOSE_LOADED,
@@ -46,6 +53,11 @@ from constants import (
     STATUS_SENT,
     VIDEO_EXTENSIONS,
 )
+from group_contacts import (
+    build_guest_vcard,
+    group_creation_summary_rows,
+    numbers_for_clipboard,
+)
 from guest_store import load_guest_list, save_guest_list
 from hosting import auto_send_available, is_cloud_host
 from wa_links import wa_me_link, whatsapp_web_link
@@ -57,6 +69,7 @@ from utils import (
     normalize_mobile_number,
     validate_attachment_for_whatsapp,
 )
+from whatsapp_group_service import create_whatsapp_group, validate_group_request
 from whatsapp_service import (
     configure_delays,
     delay_between_messages,
@@ -299,6 +312,11 @@ def inject_custom_styles() -> None:
             margin-bottom: 0.5rem;
           }
 
+          .group-action-row [data-testid="column"] .stDownloadButton > button,
+          .group-action-row [data-testid="column"] .stButton > button {
+            width: 100%;
+          }
+
           a[data-testid="stLinkButton"] {
             border-radius: 12px !important;
             min-height: 2.75rem;
@@ -412,6 +430,9 @@ def init_session_state() -> None:
         SESSION_DELAY_MAX: DELAY_MAX_SECONDS,
         SESSION_SEND_MODE: SEND_MODE_QUICK,
         SESSION_MANUAL_SENT: set(),
+        SESSION_GROUP_NAME: DEFAULT_GROUP_NAME,
+        SESSION_GROUP_MODE: GROUP_MODE_QUICK,
+        SESSION_GROUP_LOG: [],
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -450,6 +471,7 @@ def render_hero() -> None:
           <span class="step-chip">2 · Review numbers</span>
           <span class="step-chip">3 · Compose</span>
           <span class="step-chip">4 · Send</span>
+          <span class="step-chip">Group</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -496,9 +518,14 @@ def render_sidebar() -> None:
             - Works on **phone & laptop**
             - Tap each guest → WhatsApp opens → attach file → send → back here
 
+            **Create group**
+            - **Quick Group** on phone: import .vcf → New group in WhatsApp
+            - **Auto Group** on laptop: one button in the app
+
             **Auto Send**
-            - Opens **WhatsApp in Chrome** automatically (keeps your login)
-            - Run this app in **Edge or Brave** — Chrome will restart when you click Auto Send
+            - Opens a **separate Chrome window** for WhatsApp (scan QR once)
+            - Run this app in **Edge or Brave**, not Chrome
+            - Keep automation Chrome maximized while sending
             - Use Quick Send if auto fails
             """
         )
@@ -578,6 +605,207 @@ def render_guest_editor() -> None:
             st.session_state[SESSION_FILE_UPLOAD_KEY] += 1
             save_guest_list(st.session_state[SESSION_GUEST_LIST])
             st.rerun()
+
+
+def render_group_section() -> None:
+    with st.container(border=True):
+        st.markdown('<p class="section-title">Create WhatsApp group</p>', unsafe_allow_html=True)
+
+        mobile_numbers = collect_mobile_numbers()
+        guest_count = len(mobile_numbers)
+        invalid_count = count_invalid_numbers(mobile_numbers)
+
+        st.markdown(
+            f"""
+            <div class="stat-row">
+              <span class="stat-pill">{guest_count} guests for group</span>
+              {f'<span class="stat-pill stat-pill--warn">{invalid_count} invalid</span>' if invalid_count else ''}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        group_name = st.text_input(
+            "Group name",
+            value=st.session_state.get(SESSION_GROUP_NAME, DEFAULT_GROUP_NAME),
+            placeholder="e.g. Chandana's Wedding Guests",
+            help="Shown as the WhatsApp group title.",
+        )
+        st.session_state[SESSION_GROUP_NAME] = group_name
+
+        group_options = [GROUP_MODE_QUICK]
+        if auto_send_available():
+            group_options.append(GROUP_MODE_AUTO)
+
+        if len(group_options) == 1:
+            group_mode = GROUP_MODE_QUICK
+            st.caption("Quick Group works on phone and laptop (recommended).")
+        else:
+            group_mode = st.radio(
+                "How to create the group",
+                options=group_options,
+                format_func=lambda value: (
+                    "Quick Group — import contacts on phone, then one tap in WhatsApp (recommended)"
+                    if value == GROUP_MODE_QUICK
+                    else "Auto Group — create in Chrome automatically (laptop only)"
+                ),
+                horizontal=False,
+                key=SESSION_GROUP_MODE,
+            )
+
+        if guest_count > WHATSAPP_MAX_GROUP_PARTICIPANTS:
+            st.warning(
+                f"WhatsApp allows up to **{WHATSAPP_MAX_GROUP_PARTICIPANTS}** members per group. "
+                f"You have **{guest_count}** guests — remove some or create two groups."
+            )
+
+        if group_mode == GROUP_MODE_QUICK:
+            render_quick_group_panel(mobile_numbers, group_name, invalid_count)
+        else:
+            render_auto_group_panel(mobile_numbers, group_name, invalid_count, guest_count)
+
+
+def render_quick_group_panel(
+    mobile_numbers: list[str],
+    group_name: str,
+    invalid_count: int,
+) -> None:
+    st.markdown(
+        '<span class="mode-badge">Works on phone & laptop · most reliable</span>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="notice-box tip-box">
+          <strong>On your phone (3 steps):</strong><br>
+          1. Download <em>guest contacts</em> below and open the file — tap Import.<br>
+          2. Open WhatsApp → <strong>New group</strong> → search <strong>Wedding Guest</strong> → select all.<br>
+          3. Set the group name and tap <strong>Create</strong>.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not mobile_numbers:
+        st.warning("Upload your guest list in step 1 first.")
+        return
+
+    error = validate_group_request(mobile_numbers, group_name, invalid_count)
+    if error:
+        st.error(error)
+        return
+
+    vcard_bytes = build_guest_vcard(mobile_numbers).encode("utf-8")
+    clipboard_text = numbers_for_clipboard(mobile_numbers)
+
+    st.markdown('<div class="group-action-row">', unsafe_allow_html=True)
+    col_vcard, col_copy = st.columns(2)
+    with col_vcard:
+        st.download_button(
+            label="Download guest contacts (.vcf)",
+            data=vcard_bytes,
+            file_name="wedding_guest_contacts.vcf",
+            mime="text/vcard",
+            use_container_width=True,
+            help="Import on iPhone or Android, then add all Wedding Guest contacts to a new group.",
+        )
+    with col_copy:
+        st.download_button(
+            label="Download number list (.txt)",
+            data=clipboard_text.encode("utf-8"),
+            file_name="guest_numbers.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    with st.expander("Copy all numbers here", expanded=False):
+        st.text_area(
+            "Guest numbers",
+            value=clipboard_text,
+            height=120,
+            label_visibility="collapsed",
+        )
+        st.caption("Long-press to select all on phone, or use the .txt download above.")
+
+    st.caption(f"Suggested group name: **{group_name.strip() or DEFAULT_GROUP_NAME}**")
+
+
+def render_auto_group_panel(
+    mobile_numbers: list[str],
+    group_name: str,
+    invalid_count: int,
+    guest_count: int,
+) -> None:
+    st.markdown(
+        '<span class="mode-badge">Desktop only · uses automation Chrome</span>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="notice-box warning-box">
+          <strong>Auto Group:</strong> Chrome opens WhatsApp Web and creates the group for you.
+          Scan the QR code once if asked. Numbers must appear in WhatsApp search
+          (message them once or use Quick Group on phone first).
+          Keep automation Chrome <strong>visible</strong>.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not mobile_numbers:
+        st.warning("Upload your guest list in step 1 first.")
+        return
+
+    error = validate_group_request(mobile_numbers, group_name, invalid_count)
+    if error:
+        st.error(error)
+        return
+
+    if st.button(
+        f"Create group · all {guest_count} guests",
+        type="primary",
+        use_container_width=True,
+        key="auto_create_group",
+    ):
+        run_auto_group_flow(group_name.strip(), mobile_numbers)
+
+
+def run_auto_group_flow(group_name: str, mobile_numbers: list[str]) -> None:
+    progress = st.progress(0, text="Opening Chrome for WhatsApp…")
+    status = st.empty()
+
+    status.info(
+        "Creating your group… If you see a QR code, scan it once. "
+        "Keep the Chrome window visible."
+    )
+    progress.progress(0.15, text="Adding guests to the group…")
+
+    result = create_whatsapp_group(group_name, mobile_numbers)
+    progress.progress(1.0, text="Done")
+
+    if result.success:
+        status.success(result.detail)
+        added_numbers = [n for n in mobile_numbers if n not in result.skipped_numbers]
+        log_rows = group_creation_summary_rows(added_numbers, result.skipped_numbers)
+        st.session_state[SESSION_GROUP_LOG] = log_rows
+    else:
+        status.error(result.detail)
+
+    if result.skipped_numbers:
+        st.warning(
+            "These numbers were not found in WhatsApp Web search: "
+            + ", ".join(f"`{n}`" for n in result.skipped_numbers[:8])
+            + (" …" if len(result.skipped_numbers) > 8 else "")
+            + ". Use **Quick Group** on your phone after importing the .vcf file."
+        )
+
+
+def render_group_log() -> None:
+    group_log = st.session_state.get(SESSION_GROUP_LOG, [])
+    if group_log:
+        st.markdown('<p class="section-title">Group creation log</p>', unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame(group_log), use_container_width=True, hide_index=True)
 
 
 def load_manual_sent_numbers() -> set[str]:
@@ -899,10 +1127,11 @@ def render_auto_send_panel(
     st.markdown(
         f"""
         <div class="notice-box warning-box">
-          <strong>Auto Send:</strong> Chrome will open with <strong>WhatsApp Web</strong> automatically
-          (uses your normal Chrome login).{attachment_note}
-          Keep this app in <strong>Edge or Brave</strong> — not Chrome. Videos must be under 100 MB.
-          If this fails, use <strong>Quick Send</strong> — it always works.
+          <strong>Auto Send:</strong> A separate <strong>Chrome</strong> window opens with WhatsApp Web.{attachment_note}
+          <strong>First time only:</strong> scan the QR code in that Chrome window with your phone.
+          Keep this dashboard in <strong>Edge or Brave</strong> — do not use Chrome for the app.
+          Leave the automation Chrome <strong>maximized and visible</strong> while sending.
+          Videos must be under 100 MB. If auto fails, use <strong>Quick Send</strong>.
         </div>
         """,
         unsafe_allow_html=True,
@@ -954,8 +1183,9 @@ def run_send_flow(test_only: bool = False) -> None:
     st.session_state[SESSION_SEND_LOG] = send_log
 
     status_placeholder.info(
-        "Starting Chrome with WhatsApp… "
-        "Chrome may close and reopen — keep this window open in Edge or Brave."
+        "Opening Chrome for WhatsApp… "
+        "If you see a QR code, scan it with your phone (first time only). "
+        "Keep the Chrome window visible and this app in Edge or Brave."
     )
     try:
         start_send_session()
@@ -1080,12 +1310,16 @@ def main() -> None:
         render_guest_editor()
 
     with st.container():
+        render_group_section()
+
+    with st.container():
         render_message_section()
 
     with st.container():
         render_send_section()
 
     render_send_log()
+    render_group_log()
 
 
 if __name__ == "__main__":

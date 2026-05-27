@@ -5,12 +5,16 @@ from __future__ import annotations
 import io
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
 
 from constants import (
+    ATTACHMENT_FOLDER,
+    ATTACHMENT_UPLOAD_STAGING_DIR,
+    ATTACHMENT_UPLOAD_STAGING_NAME,
     DOCUMENT_EXTENSIONS,
     IMAGE_EXTENSIONS,
     MOBILE_NUMBER_COLUMN,
@@ -134,6 +138,35 @@ def attachment_size_label(attachment_path: str) -> str:
     if size_mb >= 1:
         return f"{size_mb:.1f} MB"
     return f"{size_mb * 1024:.0f} KB"
+
+
+def prepare_upload_attachment_path(attachment_path: str) -> str:
+    """
+    Copy attachment to a simple staging path for Selenium file inputs.
+    Windows + Chrome often fail on paths with spaces or parentheses in the filename.
+    Reuses the cached copy when the source file has not changed.
+    """
+    source = Path(attachment_path)
+    if not source.is_file():
+        raise FileNotFoundError(f"Attachment not found: {attachment_path}")
+
+    staging_dir = Path(ATTACHMENT_UPLOAD_STAGING_DIR)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    destination = staging_dir / f"{ATTACHMENT_UPLOAD_STAGING_NAME}{source.suffix.lower()}"
+
+    if destination.exists():
+        source_stat = source.stat()
+        dest_stat = destination.stat()
+        if (
+            dest_stat.st_size == source_stat.st_size
+            and dest_stat.st_mtime >= source_stat.st_mtime
+        ):
+            return str(destination.resolve())
+
+    if destination.exists():
+        destination.unlink()
+    shutil.copy2(source, destination)
+    return str(destination.resolve())
 
 
 def validate_attachment_for_whatsapp(attachment_path: str) -> str | None:

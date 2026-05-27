@@ -32,16 +32,23 @@ from constants import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     WHATSAPP_AFTER_ATTACH_SECONDS,
+    WHATSAPP_CHROME_DEBUG_PORT,
+    WHATSAPP_CHROME_PROFILE_DIR_NAME,
     WHATSAPP_MAX_UPLOAD_WAIT_SECONDS,
     WHATSAPP_UPLOAD_SECONDS_PER_MB,
     WHATSAPP_PAGE_WAIT_SECONDS,
 )
-from utils import validate_attachment_for_whatsapp
+from utils import prepare_upload_attachment_path, validate_attachment_for_whatsapp
 
-CHROME_DEBUG_PORT = int(os.environ.get("WHATSAPP_CHROME_DEBUG_PORT", "9222"))
+_PROJECT_ROOT = Path(__file__).resolve().parent
+_DEFAULT_CHROME_PROFILE = _PROJECT_ROOT / WHATSAPP_CHROME_PROFILE_DIR_NAME
+
+CHROME_DEBUG_PORT = int(
+    os.environ.get("WHATSAPP_CHROME_DEBUG_PORT", str(WHATSAPP_CHROME_DEBUG_PORT))
+)
 CHROME_PROFILE_DIR = os.environ.get(
     "WHATSAPP_CHROME_PROFILE_DIR",
-    os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data"),
+    str(_DEFAULT_CHROME_PROFILE),
 )
 CHROME_PROFILE_NAME = os.environ.get("WHATSAPP_CHROME_PROFILE", "Default")
 CHAT_WAIT_SECONDS = WHATSAPP_PAGE_WAIT_SECONDS
@@ -49,8 +56,8 @@ LOGIN_WAIT_SECONDS = 180
 UPLOAD_WAIT_SECONDS = WHATSAPP_MAX_UPLOAD_WAIT_SECONDS
 
 # Short pauses only where the UI needs a moment to react (not between guests)
-UI_PAUSE_SHORT = 0.25
-UI_PAUSE_MED = 0.5
+UI_PAUSE_SHORT = 0.1
+UI_PAUSE_MED = 0.2
 
 
 def find_chrome_executable() -> str:
@@ -190,7 +197,8 @@ def friendly_error(error: Exception) -> str:
 
 
 CHROME_SETUP_HINT = (
-    "Click Auto Send again — Chrome will restart automatically with WhatsApp."
+    "A separate Chrome window will open for WhatsApp. "
+    "Scan the QR code there once, then try Auto Send again."
 )
 
 
@@ -207,9 +215,9 @@ class WhatsAppSession:
             self._ensure_whatsapp_tab()
             return
 
+        os.makedirs(CHROME_PROFILE_DIR, exist_ok=True)
+
         if not is_debug_port_open():
-            if is_chrome_running():
-                kill_chrome_processes()
             self._launch_chrome_with_debugging()
 
         if not is_debug_port_open():
@@ -218,8 +226,9 @@ class WhatsAppSession:
             )
 
         if not self._try_connect_debugger():
-            kill_chrome_processes()
-            self._launch_chrome_with_debugging()
+            time.sleep(2)
+            if not is_debug_port_open():
+                self._launch_chrome_with_debugging()
             if not self._try_connect_debugger():
                 raise RuntimeError(
                     f"Could not connect to Chrome. {CHROME_SETUP_HINT}"
@@ -266,23 +275,19 @@ class WhatsAppSession:
 
     def _launch_chrome_with_debugging(self) -> None:
         chrome_path = find_chrome_executable()
+        os.makedirs(CHROME_PROFILE_DIR, exist_ok=True)
         launch_args = [
             chrome_path,
             f"--remote-debugging-port={CHROME_DEBUG_PORT}",
             "--remote-allow-origins=*",
+            f"--user-data-dir={CHROME_PROFILE_DIR}",
+            f"--profile-directory={CHROME_PROFILE_NAME}",
             "https://web.whatsapp.com",
             "--no-first-run",
             "--no-default-browser-check",
             "--start-maximized",
             "--disable-session-crashed-bubble",
         ]
-        if os.path.isdir(CHROME_PROFILE_DIR):
-            launch_args.extend(
-                [
-                    f"--user-data-dir={CHROME_PROFILE_DIR}",
-                    f"--profile-directory={CHROME_PROFILE_NAME}",
-                ]
-            )
         subprocess.Popen(
             launch_args,
             stdout=subprocess.DEVNULL,
@@ -402,7 +407,7 @@ class WhatsAppSession:
             return
         for _ in range(2):
             ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
-            time.sleep(0.4)
+            time.sleep(0.15)
         time.sleep(0.5)
 
     def dismiss_before_navigation(self) -> None:
@@ -432,9 +437,7 @@ class WhatsAppSession:
 
         if attachment_path:
             self._open_conversation(mobile_number)
-            self._focus_browser_window()
             self._focus_chat_footer()
-            time.sleep(UI_PAUSE_MED)
         else:
             self.driver.get(conversation_url(mobile_number, message))
             self._wait_for_chat_ready()
@@ -445,7 +448,7 @@ class WhatsAppSession:
         else:
             self._click_send_button()
 
-        time.sleep(UI_PAUSE_MED)
+        time.sleep(UI_PAUSE_SHORT)
 
     def _focus_browser_window(self) -> None:
         if self.driver is None:
@@ -466,7 +469,7 @@ class WhatsAppSession:
                             break
             except Exception:
                 pass
-        time.sleep(0.5)
+        time.sleep(0.12)
 
     def _find_message_composers(self) -> list[WebElement]:
         if self.driver is None:
@@ -647,9 +650,7 @@ class WhatsAppSession:
         if self.driver is None:
             return
 
-        self._ensure_on_whatsapp_home()
         self._focus_browser_window()
-        time.sleep(UI_PAUSE_MED)
 
         search_selectors = [
             '#side div[contenteditable="true"][data-tab="3"]',
@@ -683,7 +684,7 @@ class WhatsAppSession:
             search_box.send_keys(Keys.CONTROL, "a")
             search_box.send_keys(Keys.BACKSPACE)
             search_box.send_keys(term)
-            time.sleep(1.5)
+            time.sleep(0.7)
 
             phone_tail = phone[-10:]
             result_xpaths = [
@@ -720,18 +721,25 @@ class WhatsAppSession:
         raise RuntimeError(f"Could not find {mobile_number} in WhatsApp search.")
 
     def _open_conversation(self, mobile_number: str) -> None:
-        """Open chat via search — avoids full-page reloads from direct links."""
+        """Open chat via search first (fast); fall back to direct link for new numbers."""
         if self.driver is None:
             return
 
         last_error: Exception | None = None
-        for attempt in range(3):
+        open_methods = (
+            self._open_conversation_via_search,
+            self._open_conversation_via_direct_link,
+        )
+
+        for open_method in open_methods:
             try:
-                self._ensure_on_whatsapp_home()
-                self._wait_for_app_ready()
-                self._open_conversation_via_search(mobile_number)
+                self.dismiss_before_navigation()
+                self._switch_to_whatsapp_tab()
+                if not self._is_logged_in():
+                    self._wait_until_logged_in()
+                open_method(mobile_number)
                 self._ensure_valid_number(mobile_number)
-                self._wait_for_chat_fully_loaded(timeout=90)
+                self._wait_for_chat_fully_loaded(timeout=45)
                 self._focus_chat_footer()
                 self._wait_for_footer_attach_button()
                 return
@@ -739,7 +747,7 @@ class WhatsAppSession:
                 last_error = exc
                 if self._has_attachment_overlay():
                     self.dismiss_stale_ui()
-                time.sleep(UI_PAUSE_MED)
+                time.sleep(UI_PAUSE_SHORT)
 
         raise RuntimeError(
             f"Could not open WhatsApp chat for {mobile_number}. "
@@ -768,23 +776,16 @@ class WhatsAppSession:
 
         chat_url = conversation_url(mobile_number)
         self.driver.get(chat_url)
-        self._focus_browser_window()
         self._wait_for_starting_chat_to_finish()
 
-        for _ in range(4):
+        for _ in range(3):
             self._click_continue_to_chat_if_present()
             if self._is_conversation_open():
                 return
-            time.sleep(1.5)
+            time.sleep(0.6)
 
         if not self._is_conversation_open():
-            self.driver.execute_script(f"window.location.href = {chat_url!r};")
-            self._wait_for_starting_chat_to_finish()
-            for _ in range(3):
-                self._click_continue_to_chat_if_present()
-                if self._is_conversation_open():
-                    return
-                time.sleep(1.5)
+            raise RuntimeError(f"Chat did not open for {mobile_number}")
 
     def _wait(self, timeout: int = CHAT_WAIT_SECONDS) -> WebDriverWait:
         if self.driver is None:
@@ -862,7 +863,7 @@ class WhatsAppSession:
         except TimeoutException:
             pass
 
-        time.sleep(1)
+        time.sleep(0.12)
 
     def _ensure_valid_number(self, mobile_number: str) -> None:
         if self.driver is None:
@@ -904,7 +905,7 @@ class WhatsAppSession:
             "arguments[0].scrollIntoView({block: 'center', inline: 'center'});",
             element,
         )
-        time.sleep(0.4)
+        time.sleep(0.15)
         try:
             element.click()
         except (ElementClickInterceptedException, WebDriverException):
@@ -954,7 +955,9 @@ class WhatsAppSession:
             '#main footer span[data-icon="attach-menu-plus"]',
             '#main footer [data-testid="attach-menu-plus"]',
             '#main footer button[aria-label="Attach"]',
+            '#main footer button[aria-label*="ttach"]',
             '#main footer div[title="Attach"]',
+            '#main footer [data-icon="attach-menu-plus"]',
         ]
         attach_xpaths = [
             "//*[@id='main']//footer//span[@data-icon='plus-rounded' or @data-icon='plus' or @data-icon='clip']",
@@ -993,14 +996,14 @@ class WhatsAppSession:
 
         self._focus_browser_window()
         self._focus_chat_footer()
-        time.sleep(0.8)
+        time.sleep(0.2)
 
         attach_buttons = self._find_attach_buttons()
         if not attach_buttons:
             try:
                 message_box = self._get_message_box()
                 ActionChains(self.driver).move_to_element(message_box).click().perform()
-                time.sleep(0.8)
+                time.sleep(0.2)
             except RuntimeError:
                 pass
             attach_buttons = self._find_attach_buttons()
@@ -1083,12 +1086,30 @@ class WhatsAppSession:
         try:
             self._prepare_file_input(file_input)
             file_input.send_keys(file_path)
-            time.sleep(UI_PAUSE_MED)
-            if self._whatsapp_error_visible():
-                return False
-            return True
+            for _ in range(30):
+                if self._whatsapp_error_visible():
+                    self._dismiss_error_toast()
+                    return False
+                if self._preview_is_open():
+                    return True
+                time.sleep(0.2)
+            return False
         except WebDriverException:
             return False
+
+    def _dismiss_error_toast(self) -> None:
+        if self.driver is None:
+            return
+        for element in self.driver.find_elements(
+            By.XPATH,
+            "//*[contains(@role,'alert') or contains(@data-testid,'toast')]",
+        ):
+            if element.is_displayed():
+                try:
+                    self._javascript_click(element)
+                except WebDriverException:
+                    pass
+        self._press_escape()
 
     def _is_document_only_input(self, file_input: WebElement) -> bool:
         accept = (file_input.get_attribute("accept") or "").lower()
@@ -1099,37 +1120,23 @@ class WhatsAppSession:
         return "image" not in accept and "video" not in accept and "mp4" not in accept
 
     def _inject_file_into_menu_input(self, attachment_path: str, kind: str) -> bool:
-        """Send file to hidden input in attach menu — avoids Windows file dialog."""
+        """Upload only through the correct Photos & videos / Document input."""
         if self.driver is None:
             return False
 
-        if kind == "document":
-            selectors = [
-                'li[data-testid="mi-document"] input[type="file"]',
-                '[data-testid="attach-document"] input[type="file"]',
-                'input[type="file"][accept*=".pdf"]',
-                'input[type="file"][accept*="application"]',
-            ]
-        else:
+        if kind in {"image", "video"}:
             selectors = [
                 'li[data-testid="mi-attach-media"] input[type="file"]',
                 '[data-testid="attach-media"] input[type="file"]',
-                'input[type="file"][accept*="video"]',
-                'input[type="file"][accept*="image"]',
-                'input[type="file"][accept*="mp4"]',
+            ]
+        else:
+            selectors = [
+                'li[data-testid="mi-document"] input[type="file"]',
+                '[data-testid="attach-document"] input[type="file"]',
             ]
 
         for selector in selectors:
             for file_input in self.driver.find_elements(By.CSS_SELECTOR, selector):
-                if self._try_send_file_to_input(file_input, attachment_path):
-                    return True
-
-        for file_input in self._collect_file_inputs():
-            if kind == "document":
-                if self._file_input_matches_kind(file_input, kind):
-                    if self._try_send_file_to_input(file_input, attachment_path):
-                        return True
-            elif not self._is_document_only_input(file_input):
                 if self._try_send_file_to_input(file_input, attachment_path):
                     return True
 
@@ -1288,34 +1295,28 @@ class WhatsAppSession:
         if self.driver is None:
             return
 
-        if self._inject_file_into_menu_input(attachment_path, kind):
-            return
+        media_kind = "image" if kind in {"image", "video"} else "document"
+        menu_label = "Photos & videos" if media_kind == "image" else "Document"
 
-        if not self._click_attach_menu_item(kind):
+        if not self._click_attach_menu_item(media_kind):
             raise RuntimeError(
-                f"Could not click Photos & videos in the attach menu "
-                f"(needed for {kind} files)."
+                f"Could not click {menu_label} in the attach menu "
+                f"(required for {kind} files)."
             )
 
-        time.sleep(UI_PAUSE_MED)
-        file_inputs = self._wait_for_file_input(kind, timeout=8)
+        time.sleep(UI_PAUSE_SHORT)
+        file_inputs = self._wait_for_file_input(media_kind, timeout=6)
 
         for file_input in file_inputs:
             if self._try_send_file_to_input(file_input, attachment_path):
                 return
 
-        for file_input in self._collect_file_inputs():
-            if kind == "document":
-                if not self._file_input_matches_kind(file_input, kind):
-                    continue
-            elif self._is_document_only_input(file_input):
-                continue
-            if self._try_send_file_to_input(file_input, attachment_path):
-                return
+        if self._inject_file_into_menu_input(attachment_path, kind):
+            return
 
         raise RuntimeError(
-            "Could not upload the file. WhatsApp may have opened a file picker — "
-            "keep the automation Chrome window focused and try again."
+            f"Could not upload the {kind} file. "
+            "WhatsApp rejected it — use Photos & videos for MP4, not Document."
         )
 
     def _upload_via_hidden_input(self, attachment_path: str, kind: str) -> None:
@@ -1325,55 +1326,31 @@ class WhatsAppSession:
         if not os.path.isfile(attachment_path):
             raise FileNotFoundError(f"Attachment file not found: {attachment_path}")
 
-        last_error: Exception | None = None
+        if self._preview_is_open():
+            return
 
-        for _attempt in range(3):
-            try:
-                if self._preview_is_open():
-                    return
+        self._wait_for_chat_fully_loaded(timeout=25)
+        self._focus_chat_footer()
+        self._wait_for_footer_attach_button()
+        self._open_attach_menu()
+        self._wait_for_attach_menu()
+        self._upload_via_menu_inputs(attachment_path, kind)
 
-                self._wait_for_chat_fully_loaded(timeout=45)
-
-                self._focus_browser_window()
-                self._focus_chat_footer()
-
-                if self._has_attachment_overlay() and not self._preview_is_open():
-                    self.dismiss_stale_ui()
-                    time.sleep(UI_PAUSE_SHORT)
-                    self._wait_for_chat_fully_loaded(timeout=30)
-
-                try:
-                    message_box = self._get_message_box()
-                    ActionChains(self.driver).move_to_element(message_box).click().perform()
-                    time.sleep(UI_PAUSE_SHORT)
-                except RuntimeError:
-                    pass
-
-                self._wait_for_footer_attach_button()
-                self._open_attach_menu()
-                self._wait_for_attach_menu()
-                self._upload_via_menu_inputs(attachment_path, kind)
-
-                time.sleep(UI_PAUSE_MED)
-                if self._whatsapp_error_visible():
-                    raise RuntimeError(
-                        "WhatsApp rejected the file. Videos must use Photos & videos, not Document."
-                    )
-                return
-            except Exception as exc:
-                last_error = exc
-                if self._has_attachment_overlay():
-                    self.dismiss_stale_ui()
-                time.sleep(UI_PAUSE_MED)
-
-        raise RuntimeError(
-            f"Could not upload the attachment after multiple attempts: {last_error}"
-        )
+        if self._whatsapp_error_visible():
+            raise RuntimeError(
+                "WhatsApp rejected the file. Videos must use Photos & videos, not Document."
+            )
 
     def _upload_wait_seconds(self, attachment_path: str, kind: str) -> int:
         size_mb = os.path.getsize(attachment_path) / (1024 * 1024)
         if kind == "video":
-            return max(20, min(WHATSAPP_MAX_UPLOAD_WAIT_SECONDS, int(size_mb * WHATSAPP_UPLOAD_SECONDS_PER_MB + 15)))
+            return max(
+                45,
+                min(
+                    WHATSAPP_MAX_UPLOAD_WAIT_SECONDS,
+                    int(size_mb * WHATSAPP_UPLOAD_SECONDS_PER_MB + 25),
+                ),
+            )
         if kind == "document":
             return max(WHATSAPP_AFTER_ATTACH_SECONDS, min(90, int(size_mb * 2 + 8)))
         return WHATSAPP_AFTER_ATTACH_SECONDS
@@ -1407,21 +1384,20 @@ class WhatsAppSession:
         if self.driver is None:
             return
 
-        WebDriverWait(self.driver, UPLOAD_WAIT_SECONDS).until(lambda _driver: self._preview_is_open())
+        WebDriverWait(self.driver, UPLOAD_WAIT_SECONDS).until(
+            lambda _driver: self._preview_is_open()
+        )
 
         if self._whatsapp_error_visible():
             raise RuntimeError(
                 "WhatsApp rejected the file. Videos must use Photos & videos and stay under 100 MB."
             )
 
-        time.sleep(UI_PAUSE_MED)
-
     def _wait_until_preview_send_ready(self, attachment_path: str, kind: str) -> None:
         if self.driver is None:
             return
 
-        deadline = time.time() + self._upload_wait_seconds(attachment_path, kind)
-        filename = Path(attachment_path).name.lower()
+        deadline = time.time() + min(self._upload_wait_seconds(attachment_path, kind), 90)
 
         while time.time() < deadline:
             if self._whatsapp_error_visible():
@@ -1431,10 +1407,8 @@ class WhatsAppSession:
             if self._find_preview_send_buttons():
                 return
             if self._preview_is_open():
-                page = self.driver.page_source.lower()
-                if filename in page or "no preview available" in page:
-                    return
-            time.sleep(1)
+                return
+            time.sleep(0.25)
 
         if self._preview_is_open():
             return
@@ -1473,8 +1447,25 @@ class WhatsAppSession:
 
         return None
 
+    def _set_contenteditable_text(self, element: WebElement, text: str) -> None:
+        if self.driver is None:
+            return
+        self.driver.execute_script(
+            """
+            const el = arguments[0];
+            const text = arguments[1];
+            el.focus();
+            el.textContent = '';
+            el.textContent = text;
+            el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            """,
+            element,
+            text,
+        )
+
     def _try_set_preview_caption(self, message: str) -> None:
-        """Add caption if possible — video still sends without it."""
+        """Add caption instantly via JS — video sends even without caption."""
         if not message.strip() or self.driver is None:
             return
 
@@ -1484,15 +1475,8 @@ class WhatsAppSession:
             return
 
         try:
-            self._javascript_click(caption_box)
-            caption_box.send_keys(Keys.CONTROL, "a")
-            caption_box.send_keys(Keys.BACKSPACE)
-            import pyperclip
-
-            pyperclip.copy(message)
-            caption_box.send_keys(Keys.CONTROL, "v")
+            self._set_contenteditable_text(caption_box, message)
             self._clear_main_composer()
-            time.sleep(UI_PAUSE_SHORT)
         except WebDriverException:
             pass
 
@@ -1534,7 +1518,8 @@ class WhatsAppSession:
         send_icon_css = (
             'span[data-icon="wds-ic-send-filled"], '
             'span[data-icon="send"], '
-            'span[data-icon="send-light"]'
+            'span[data-icon="send-light"], '
+            'span[data-icon="wds-ic-send"]'
         )
         results: list[WebElement] = []
         seen: set[str] = set()
@@ -1621,37 +1606,53 @@ class WhatsAppSession:
     def _set_preview_caption(self, message: str) -> None:
         self._try_set_preview_caption(message)
 
+    def _send_preview_with_keyboard(self) -> None:
+        """Press Enter on the preview caption — reliable when the send icon moved."""
+        if self.driver is None:
+            return
+        caption_box = self._get_preview_caption_box()
+        if caption_box is not None:
+            try:
+                self._javascript_click(caption_box)
+                caption_box.send_keys(Keys.ENTER)
+                time.sleep(1.5)
+                if not self._preview_is_open():
+                    return
+            except WebDriverException:
+                pass
+        ActionChains(self.driver).send_keys(Keys.ENTER).perform()
+        time.sleep(1.5)
+
     def _click_preview_send_button(self) -> None:
         if self.driver is None:
             return
 
         self._clear_main_composer()
-        self._focus_browser_window()
 
-        for _attempt in range(15):
+        for _attempt in range(8):
             if not self._preview_is_open():
                 return
 
             if self._click_overlay_send_via_js():
-                time.sleep(1.5)
+                time.sleep(0.6)
                 if not self._preview_is_open():
                     return
 
             for button in self._find_preview_send_buttons():
                 try:
                     self._click_element_or_parent(button)
-                    time.sleep(1.5)
+                    time.sleep(0.6)
                     if not self._preview_is_open():
                         return
                 except StaleElementReferenceException:
                     continue
 
-            if _attempt >= 5 and self._click_preview_send_pyautogui():
-                time.sleep(2)
+            if _attempt >= 3:
+                self._send_preview_with_keyboard()
                 if not self._preview_is_open():
                     return
 
-            time.sleep(2)
+            time.sleep(0.15)
 
         if self._preview_is_open():
             raise RuntimeError(
@@ -1696,20 +1697,23 @@ class WhatsAppSession:
         def send_complete(_driver: webdriver.Chrome) -> bool:
             if self._preview_is_open():
                 return False
-            return self._last_outgoing_message_is_media()
+            if self._last_outgoing_message_is_media():
+                return True
+            return not self._has_attachment_overlay()
 
         try:
-            WebDriverWait(self.driver, 90).until(send_complete)
+            WebDriverWait(self.driver, 120).until(send_complete)
         except TimeoutException as exc:
             if self._preview_is_open():
                 raise RuntimeError(
                     "The video preview is still open — the attachment was not sent. "
                     "Large videos need more time. Keep the Chrome window maximized."
                 ) from exc
-            raise RuntimeError(
-                "Only the text message was sent — the video did not go through. "
-                "Try Auto Send again with the Chrome window maximized."
-            ) from exc
+            if not self._last_outgoing_message_is_media():
+                raise RuntimeError(
+                    "The attachment may not have been sent. "
+                    "Keep Chrome maximized and try Auto test again."
+                ) from exc
 
     def _click_send_button(self) -> None:
         if self.driver is None:
@@ -1744,11 +1748,321 @@ class WhatsAppSession:
         raise RuntimeError("WhatsApp message box not found — chat may not be open.")
 
     def _send_attachment(self, attachment_path: str, message: str) -> None:
-        kind = attachment_kind(attachment_path)
+        upload_path = prepare_upload_attachment_path(attachment_path)
+        kind = attachment_kind(upload_path)
         self._clear_main_composer()
-        self._upload_via_hidden_input(attachment_path, kind)
+        self._upload_via_hidden_input(upload_path, kind)
         self._wait_for_attachment_preview()
-        self._wait_until_preview_send_ready(attachment_path, kind)
+        self._wait_until_preview_send_ready(upload_path, kind)
         self._set_preview_caption(message)
         self._click_preview_send_button()
+        if self._preview_is_open():
+            self._send_preview_with_keyboard()
         self._verify_attachment_sent()
+
+    def create_group(self, group_name: str, mobile_numbers: list[str]) -> dict[str, list[str]]:
+        """Create a WhatsApp group and add guests. Returns added and skipped numbers."""
+        if self.driver is None:
+            raise RuntimeError("WhatsApp browser session is not started.")
+
+        self._switch_to_whatsapp_tab()
+        if not self._is_logged_in():
+            self._wait_until_logged_in()
+
+        self.dismiss_stale_ui()
+        self._open_new_group_wizard()
+
+        added: list[str] = []
+        skipped: list[str] = []
+        for mobile_number in mobile_numbers:
+            if self._add_group_participant(mobile_number):
+                if mobile_number not in added:
+                    added.append(mobile_number)
+            else:
+                skipped.append(mobile_number)
+            time.sleep(0.2)
+
+        if not added:
+            raise RuntimeError(
+                "Could not add any guests to the group. "
+                "On WhatsApp Web, numbers must appear in search — use Quick Group on "
+                "your phone (import contacts file) or message guests once first."
+            )
+
+        self._proceed_from_participant_picker()
+        self._set_group_subject(group_name)
+        self._confirm_group_creation()
+        return {"added": added, "skipped": skipped}
+
+    def _click_by_text_labels(self, labels: tuple[str, ...]) -> bool:
+        if self.driver is None:
+            return False
+
+        for label in labels:
+            xpaths = [
+                f"//span[normalize-space()='{label}']/ancestor::div[@role='button'][1]",
+                f"//div[@role='button'][.//span[normalize-space()='{label}']]",
+                f"//*[@role='menuitem'][.//span[normalize-space()='{label}']]",
+                f"//span[normalize-space()='{label}']/ancestor::li[1]",
+                f"//div[contains(normalize-space(),'{label}')]",
+            ]
+            for xpath in xpaths:
+                for element in self.driver.find_elements(By.XPATH, xpath):
+                    if element.is_displayed():
+                        self._click_element_or_parent(element)
+                        time.sleep(UI_PAUSE_SHORT)
+                        return True
+
+        clicked = self.driver.execute_script(
+            """
+            const labels = arguments[0];
+            const nodes = document.querySelectorAll(
+                'li, div[role="button"], [role="menuitem"], span, button'
+            );
+            for (const node of nodes) {
+                const text = (node.textContent || '').trim();
+                if (!text) continue;
+                for (const label of labels) {
+                    if (text === label || text.includes(label)) {
+                        const target =
+                            node.closest('li') ||
+                            node.closest('[role="button"]') ||
+                            node.closest('[role="menuitem"]') ||
+                            node;
+                        if (target && target.offsetParent !== null) {
+                            target.click();
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+            """,
+            list(labels),
+        )
+        if clicked:
+            time.sleep(UI_PAUSE_SHORT)
+            return True
+        return False
+
+    def _open_new_group_wizard(self) -> None:
+        if self.driver is None:
+            return
+
+        self._ensure_on_whatsapp_home()
+        self.dismiss_stale_ui()
+
+        if self._click_by_text_labels(("New group",)):
+            self._wait_for_group_picker()
+            return
+
+        for selector in (
+            'span[data-icon="new-chat-outline"]',
+            '[data-testid="compose-btn"]',
+            'span[data-icon="menu"]',
+            'span[data-icon="more-refreshed"]',
+        ):
+            for element in self.driver.find_elements(By.CSS_SELECTOR, selector):
+                if not element.is_displayed():
+                    continue
+                self._click_element_or_parent(element)
+                time.sleep(UI_PAUSE_SHORT)
+                if self._click_by_text_labels(("New group",)):
+                    self._wait_for_group_picker()
+                    return
+
+        raise RuntimeError(
+            "Could not open New group in WhatsApp. "
+            "Keep the automation Chrome window on web.whatsapp.com and try again."
+        )
+
+    def _wait_for_group_picker(self, timeout: int = 30) -> None:
+        if self.driver is None:
+            return
+
+        def picker_open(_driver: webdriver.Chrome) -> bool:
+            if self._find_group_participant_search() is not None:
+                return True
+            markers = _driver.find_elements(
+                By.XPATH,
+                "//*[contains(text(),'Add participants') or contains(text(),'Add members') "
+                "or contains(text(),'Search name or number')]",
+            )
+            return any(marker.is_displayed() for marker in markers)
+
+        try:
+            WebDriverWait(self.driver, timeout).until(picker_open)
+        except TimeoutException as exc:
+            raise TimeoutException(
+                "WhatsApp group participant screen did not open."
+            ) from exc
+
+    def _find_group_participant_search(self) -> WebElement | None:
+        if self.driver is None:
+            return None
+
+        selectors = [
+            '[data-testid="contact-picker"] div[contenteditable="true"]',
+            'div[contenteditable="true"][title="Search name or number"]',
+            'div[contenteditable="true"][aria-label*="Search"]',
+            '#side div[contenteditable="true"][data-tab="3"]',
+            'div[contenteditable="true"][data-tab="3"]',
+        ]
+        for selector in selectors:
+            for element in self.driver.find_elements(By.CSS_SELECTOR, selector):
+                if element.is_displayed():
+                    return element
+
+        for element in self.driver.find_elements(By.CSS_SELECTOR, 'div[contenteditable="true"]'):
+            if not element.is_displayed():
+                continue
+            in_footer = self.driver.execute_script(
+                "return arguments[0].closest('#main footer') !== null;", element
+            )
+            if not in_footer:
+                return element
+        return None
+
+    def _add_group_participant(self, mobile_number: str) -> bool:
+        if self.driver is None:
+            return False
+
+        search_box = self._find_group_participant_search()
+        if search_box is None:
+            return False
+
+        self._javascript_click(search_box)
+        search_box.send_keys(Keys.CONTROL, "a")
+        search_box.send_keys(Keys.BACKSPACE)
+
+        phone = phone_for_url(mobile_number)
+        search_terms = [mobile_number, f"+{phone}", phone[-10:]]
+        seen: set[str] = set()
+
+        for term in search_terms:
+            if not term or term in seen:
+                continue
+            seen.add(term)
+            search_box.send_keys(Keys.CONTROL, "a")
+            search_box.send_keys(Keys.BACKSPACE)
+            search_box.send_keys(term)
+            time.sleep(0.5)
+
+            if self._select_group_participant_row(mobile_number, phone):
+                search_box.send_keys(Keys.CONTROL, "a")
+                search_box.send_keys(Keys.BACKSPACE)
+                return True
+
+        return False
+
+    def _select_group_participant_row(self, mobile_number: str, phone: str) -> bool:
+        if self.driver is None:
+            return False
+
+        phone_tail = phone[-10:]
+        xpaths = [
+            f"//div[@role='listitem'][.//span[@title='{mobile_number}']]",
+            f"//div[@role='listitem'][.//span[@title='+{phone}']]",
+            f"//div[@role='listitem'][.//span[contains(@title,'{phone_tail}')]]",
+            f"//div[@role='listitem'][.//span[contains(text(),'{phone_tail}')]]",
+        ]
+        for xpath in xpaths:
+            for element in self.driver.find_elements(By.XPATH, xpath):
+                if element.is_displayed():
+                    self._click_element_or_parent(element)
+                    time.sleep(UI_PAUSE_SHORT)
+                    return True
+
+        for item in self.driver.find_elements(By.CSS_SELECTOR, "div[role='listitem']"):
+            if item.is_displayed():
+                text = (item.text or "").lower()
+                if phone_tail in text or phone in text.replace(" ", ""):
+                    self._click_element_or_parent(item)
+                    time.sleep(UI_PAUSE_SHORT)
+                    return True
+        return False
+
+    def _proceed_from_participant_picker(self) -> None:
+        if self.driver is None:
+            return
+
+        icon_selectors = (
+            'span[data-icon="arrow-forward"]',
+            'span[data-icon="checkmark-medium"]',
+            'span[data-icon="checkmark"]',
+            'span[data-icon="send"]',
+        )
+        for selector in icon_selectors:
+            for element in self.driver.find_elements(By.CSS_SELECTOR, selector):
+                if not element.is_displayed():
+                    continue
+                in_footer = self.driver.execute_script(
+                    "return arguments[0].closest('#main footer') !== null;", element
+                )
+                if in_footer:
+                    continue
+                self._click_element_or_parent(element)
+                time.sleep(UI_PAUSE_MED)
+                return
+
+        if self._click_by_text_labels(("Next", "Arrow", "Continue")):
+            return
+
+        raise RuntimeError("Could not proceed to the group name step in WhatsApp.")
+
+    def _set_group_subject(self, group_name: str) -> None:
+        if self.driver is None:
+            return
+
+        time.sleep(UI_PAUSE_MED)
+        for element in self.driver.find_elements(
+            By.CSS_SELECTOR,
+            'div[contenteditable="true"], input[type="text"]',
+        ):
+            if not element.is_displayed():
+                continue
+            in_footer = self.driver.execute_script(
+                "return arguments[0].closest('#main footer') !== null;", element
+            )
+            if in_footer:
+                continue
+            in_side_search = self.driver.execute_script(
+                "return arguments[0].closest('#pane-side') !== null "
+                "&& arguments[0].getAttribute('data-tab') === '3';",
+                element,
+            )
+            if in_side_search:
+                continue
+            try:
+                if element.tag_name.lower() == "input":
+                    element.clear()
+                    element.send_keys(group_name)
+                else:
+                    self._set_contenteditable_text(element, group_name)
+                time.sleep(UI_PAUSE_SHORT)
+                return
+            except WebDriverException:
+                continue
+
+        raise RuntimeError("Could not find the group name field in WhatsApp.")
+
+    def _confirm_group_creation(self) -> None:
+        if self.driver is None:
+            return
+
+        if self._click_by_text_labels(("Create group", "Create")):
+            time.sleep(UI_PAUSE_MED)
+            return
+
+        for selector in (
+            'span[data-icon="checkmark-medium"]',
+            'span[data-icon="checkmark"]',
+            'span[data-icon="wds-ic-check"]',
+        ):
+            for element in self.driver.find_elements(By.CSS_SELECTOR, selector):
+                if element.is_displayed():
+                    self._click_element_or_parent(element)
+                    time.sleep(UI_PAUSE_MED)
+                    return
+
+        raise RuntimeError("Could not click Create group in WhatsApp.")

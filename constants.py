@@ -20,10 +20,22 @@ SESSION_DELAY_MAX = "delay_max_seconds"
 SESSION_SEND_MODE = "send_mode"
 SESSION_MANUAL_SENT = "manual_sent_numbers"
 SESSION_GUEST_LIST_LOADED = "guest_list_loaded"
+SESSION_GROUP_NAME = "group_name"
+SESSION_GROUP_MODE = "group_mode"
+SESSION_GROUP_LOG = "group_log"
 
 # Send modes
 SEND_MODE_QUICK = "quick_send"
 SEND_MODE_AUTO = "auto_send"
+
+# Group creation modes (same pattern as send modes)
+GROUP_MODE_QUICK = "quick_group"
+GROUP_MODE_AUTO = "auto_group"
+
+# WhatsApp group limits
+WHATSAPP_MAX_GROUP_PARTICIPANTS = 256
+DEFAULT_GROUP_NAME = "Wedding Guests"
+GROUP_CONTACT_NAME_PREFIX = "Wedding Guest"
 
 # Send log status values
 STATUS_SENT = "Sent"
@@ -80,3 +92,9 @@ WHATSAPP_MAX_IMAGE_MB = 16
 
 # Default country code (India); change in sidebar if needed
 DEFAULT_COUNTRY_CODE = "+91"
+
+# Chrome automation (local Auto Send only)
+WHATSAPP_CHROME_DEBUG_PORT = 9223
+WHATSAPP_CHROME_PROFILE_DIR_NAME = ".chrome-whatsapp-profile"
+ATTACHMENT_UPLOAD_STAGING_DIR = "attachments/upload_staging"
+ATTACHMENT_UPLOAD_STAGING_NAME = "invite"

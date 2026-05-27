@@ -52,6 +52,10 @@ def stop_send_session() -> None:
         _active_session = None
 
 
+def get_active_session() -> WhatsAppSession | None:
+    return _active_session
+
+
 def _detail_for_attachment(attachment_path: str) -> str:
     kind = attachment_kind(attachment_path)
     return {
