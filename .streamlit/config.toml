@@ -1,0 +1,11 @@
+# Streamlit Community Cloud — main entry point
+# https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/app-settings
+
+[server]
+headless = true
+
+[theme]
+primaryColor = "#B76E79"
+backgroundColor = "#FFFBF7"
+secondaryBackgroundColor = "#F5EDE6"
+textColor = "#2C2416"

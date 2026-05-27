@@ -1,0 +1,10 @@
+attachments/
+data/
+.chrome-whatsapp-profile/
+data/whatsapp_browser_profile/
+__pycache__/
+*.pyc
+.env
+.streamlit/secrets.toml
+~$*
+PyWhatKit_DB.txt
