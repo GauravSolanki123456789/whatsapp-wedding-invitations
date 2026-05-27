@@ -466,19 +466,19 @@ def render_sidebar() -> None:
         )
 
         st.markdown("---")
-        st.markdown("**Delay between messages**")
+        st.markdown("**Delay between guests**")
         delay_min = st.slider(
             "Minimum pause (seconds)",
-            min_value=10,
+            min_value=0,
             max_value=60,
             value=int(st.session_state[SESSION_DELAY_MIN]),
-            help="Shorter = faster but higher spam risk. 15–20s is a good balance.",
+            help="Extra wait between guests. Upload time is separate — set 0 for fastest.",
         )
         delay_max = st.slider(
             "Maximum pause (seconds)",
-            min_value=delay_min + 1,
+            min_value=delay_min,
             max_value=90,
-            value=max(int(st.session_state[SESSION_DELAY_MAX]), delay_min + 1),
+            value=max(int(st.session_state[SESSION_DELAY_MAX]), delay_min),
         )
         st.session_state[SESSION_DELAY_MIN] = delay_min
         st.session_state[SESSION_DELAY_MAX] = delay_max
@@ -487,8 +487,8 @@ def render_sidebar() -> None:
         st.markdown("---")
         st.markdown("**How to send safely**")
         st.caption(
-            f"Messages pause **{delay_min}–{delay_max}s** between guests. "
-            "One Chrome window handles the whole batch — faster and safer than opening a new tab every time."
+            f"Optional pause between guests: **{delay_min}–{delay_max}s**. "
+            "Set both to **0** for no extra wait (video upload still takes time)."
         )
         st.markdown(
             """
@@ -497,7 +497,8 @@ def render_sidebar() -> None:
             - Tap each guest → WhatsApp opens → attach file → send → back here
 
             **Auto Send**
-            - Laptop only · uses Chrome automation
+            - Opens **WhatsApp in Chrome** automatically (keeps your login)
+            - Run this app in **Edge or Brave** — Chrome will restart when you click Auto Send
             - Use Quick Send if auto fails
             """
         )
@@ -898,9 +899,10 @@ def render_auto_send_panel(
     st.markdown(
         f"""
         <div class="notice-box warning-box">
-          <strong>Auto Send:</strong> Opens a separate Chrome window. Close other WhatsApp tabs first.
-          Keep that window maximized.{attachment_note}
-          Videos must be under 100 MB. If this fails, use <strong>Quick Send</strong> instead — it always works.
+          <strong>Auto Send:</strong> Chrome will open with <strong>WhatsApp Web</strong> automatically
+          (uses your normal Chrome login).{attachment_note}
+          Keep this app in <strong>Edge or Brave</strong> — not Chrome. Videos must be under 100 MB.
+          If this fails, use <strong>Quick Send</strong> — it always works.
         </div>
         """,
         unsafe_allow_html=True,
@@ -952,10 +954,21 @@ def run_send_flow(test_only: bool = False) -> None:
     st.session_state[SESSION_SEND_LOG] = send_log
 
     status_placeholder.info(
-        "Opening automation Chrome… scan QR in that window if this is your first time. "
-        "Keep that window **maximized** — do not switch away while files upload."
+        "Starting Chrome with WhatsApp… "
+        "Chrome may close and reopen — keep this window open in Edge or Brave."
     )
-    start_send_session()
+    try:
+        start_send_session()
+    except RuntimeError as exc:
+        stop_send_session()
+        status_placeholder.error(str(exc))
+        progress_bar.empty()
+        return
+    except Exception as exc:
+        stop_send_session()
+        status_placeholder.error(f"Could not start Chrome automation: {exc}")
+        progress_bar.empty()
+        return
 
     try:
         for index, mobile_number in enumerate(mobile_numbers):
@@ -1002,16 +1015,17 @@ def run_send_flow(test_only: bool = False) -> None:
 
             if current < total:
                 delay_seconds = delay_between_messages()
-                countdown_placeholder = st.empty()
-                for remaining in range(int(delay_seconds), 0, -1):
-                    countdown_placeholder.caption(
-                        f"Waiting {remaining}s before next message (anti-spam delay)…"
-                    )
-                    time.sleep(1)
-                fractional = delay_seconds - int(delay_seconds)
-                if fractional > 0:
-                    time.sleep(fractional)
-                countdown_placeholder.empty()
+                if delay_seconds > 0:
+                    countdown_placeholder = st.empty()
+                    for remaining in range(int(delay_seconds), 0, -1):
+                        countdown_placeholder.caption(
+                            f"Waiting {remaining}s before next guest…"
+                        )
+                        time.sleep(1)
+                    fractional = delay_seconds - int(delay_seconds)
+                    if fractional > 0:
+                        time.sleep(fractional)
+                    countdown_placeholder.empty()
     finally:
         stop_send_session()
 

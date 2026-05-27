@@ -27,15 +27,22 @@ class SendResult:
 
 def configure_delays(min_seconds: int, max_seconds: int) -> None:
     global _delay_min_seconds, _delay_max_seconds
-    _delay_min_seconds = min_seconds
-    _delay_max_seconds = max(max_seconds, min_seconds + 1)
+    _delay_min_seconds = max(0, min_seconds)
+    _delay_max_seconds = max(_delay_min_seconds, max_seconds)
 
 
 def start_send_session() -> None:
     global _active_session
-    if _active_session is None:
-        _active_session = WhatsAppSession()
+    if _active_session is not None and _active_session.driver is not None:
         _active_session.start()
+        return
+    stop_send_session()
+    _active_session = WhatsAppSession()
+    try:
+        _active_session.start()
+    except Exception:
+        stop_send_session()
+        raise
 
 
 def stop_send_session() -> None:
@@ -69,9 +76,10 @@ def send_whatsapp_message(
             if size_error:
                 raise ValueError(size_error)
 
-        if _active_session is None:
+        if _active_session is None or _active_session.driver is None:
             start_send_session()
 
+        assert _active_session is not None
         _active_session.send(mobile_number, message, attachment_path)
 
         if attachment_path:
@@ -94,6 +102,10 @@ def send_whatsapp_message(
 
 
 def delay_between_messages() -> float:
+    if _delay_max_seconds <= 0:
+        return 0.0
+    if _delay_min_seconds <= 0:
+        return random.uniform(0, _delay_max_seconds)
     return random.uniform(_delay_min_seconds, _delay_max_seconds)
 
 
