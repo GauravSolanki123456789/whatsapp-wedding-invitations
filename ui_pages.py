@@ -12,8 +12,6 @@ from constants import (
     GUEST_NAME_COLUMN,
     MOBILE_NUMBER_COLUMN,
     SESSION_ACTIVE_FAMILY_ID,
-    SESSION_ACTIVE_FUNCTION_ID,
-    SESSION_ACTIVE_GUEST_LIST_ID,
     SESSION_COUNTRY_CODE,
     SESSION_SCAN_COMPONENT_KEY,
     SESSION_SCAN_LOOKUP_GUEST,
@@ -21,10 +19,29 @@ from constants import (
     SESSION_SCAN_PHOTO_KEY,
     SESSION_SCAN_UPLOAD_KEY,
     SESSION_SCANNER_STAFF_NAME,
-    SESSION_USE_NAMED_LIST,
+    WHATSAPP_APP_BUSINESS,
+    WHATSAPP_APP_PERSONAL,
 )
 from excel_templates import gift_guest_template_bytes, guest_list_template_bytes
-from family_service import create_family, delete_family, list_families
+from family_service import (
+    create_family,
+    delete_family,
+    get_family,
+    list_families,
+    update_family_whatsapp_settings,
+)
+from family_state import (
+    get_active_function_id,
+    get_active_guest_list_id,
+    go_to_tab,
+    set_active_function_id,
+    set_active_guest_list_id,
+    set_flash,
+    set_use_named_list_for_family,
+    sync_family_selector_widget,
+    sync_list_selector_widget,
+    use_named_list_for_family,
+)
 from gift_service import (
     create_function,
     delete_function,
@@ -79,27 +96,28 @@ def render_family_selector() -> int:
         ensure_default_family()
         families = list_families()
 
-    names = {f["name"]: f["id"] for f in families}
-    current_id = st.session_state.get(SESSION_ACTIVE_FAMILY_ID)
-    if current_id not in names.values():
-        current_id = families[0]["id"]
-        st.session_state[SESSION_ACTIVE_FAMILY_ID] = current_id
+    sync_family_selector_widget(families)
+    name_to_id = {f["name"]: int(f["id"]) for f in families}
 
-    current_name = next((f["name"] for f in families if f["id"] == current_id), families[0]["name"])
+    def _on_family_change() -> None:
+        selected_name = st.session_state["family_selector_widget"]
+        st.session_state[SESSION_ACTIVE_FAMILY_ID] = name_to_id[selected_name]
 
     col1, col2 = st.columns([2, 1])
     with col1:
-        selected_name = st.selectbox(
+        st.selectbox(
             "Family",
-            options=list(names.keys()),
-            index=list(names.keys()).index(current_name) if current_name in names else 0,
+            options=list(name_to_id.keys()),
+            key="family_selector_widget",
+            on_change=_on_family_change,
             label_visibility="collapsed",
         )
-        st.session_state[SESSION_ACTIVE_FAMILY_ID] = names[selected_name]
+        family_id = name_to_id[st.session_state["family_selector_widget"]]
+        st.session_state[SESSION_ACTIVE_FAMILY_ID] = family_id
     with col2:
         st.caption(f"{len(families)} famil{'ies' if len(families) != 1 else 'y'}")
 
-    return int(st.session_state[SESSION_ACTIVE_FAMILY_ID])
+    return int(family_id)
 
 
 def render_families_tab(family_id: int) -> None:
@@ -109,36 +127,71 @@ def render_families_tab(family_id: int) -> None:
         unsafe_allow_html=True,
     )
 
+    family = get_family(family_id) or {}
+    family_name = family.get("name", "Family")
+
     new_name = st.text_input("New family name", placeholder="e.g. Lalwani Family")
     if st.button("Add family", use_container_width=True) and new_name:
         _, err = create_family(new_name)
         if err:
             st.error(err)
         else:
-            st.success(f"Added **{new_name}**")
+            set_flash(f"Added family **{new_name}**.")
             st.rerun()
 
     families = list_families()
-    for family in families:
-        if family["id"] == family_id:
-            st.info(f"Active: **{family['name']}**")
+    for family_row in families:
+        if family_row["id"] == family_id:
+            st.info(f"Active: **{family_row['name']}**")
         else:
-            st.caption(f"• {family['name']}")
+            st.caption(f"• {family_row['name']}")
+
+    st.markdown("---")
+    st.markdown(f"**WhatsApp sender for {family_name}**")
+    st.caption(
+        "Set which WhatsApp app opens when you tap Send. "
+        "On iPhone, the phone uses whichever WhatsApp you opened last — log into the right account first."
+    )
+    wa_phone = st.text_input(
+        "Your sender number (reminder label)",
+        value=family.get("whatsapp_sender_phone") or "",
+        placeholder="+919876543210",
+        help="Not sent to WhatsApp — just reminds staff which SIM/app to use for this family.",
+    )
+    wa_app = st.radio(
+        "Open this app when sending",
+        options=[WHATSAPP_APP_PERSONAL, WHATSAPP_APP_BUSINESS],
+        format_func=lambda value: (
+            "WhatsApp (personal)"
+            if value == WHATSAPP_APP_PERSONAL
+            else "WhatsApp Business (Android intent)"
+        ),
+        index=0 if (family.get("whatsapp_app_type") or WHATSAPP_APP_PERSONAL) == WHATSAPP_APP_PERSONAL else 1,
+        horizontal=True,
+    )
+    if st.button("Save WhatsApp settings", use_container_width=True):
+        err = update_family_whatsapp_settings(family_id, wa_phone, wa_app)
+        if err:
+            st.error(err)
+        else:
+            set_flash(f"WhatsApp settings saved for **{family_name}**.")
+            st.rerun()
 
     if len(families) > 1:
         if st.button("Delete current family", use_container_width=True):
-            from family_service import delete_family
-
             err = delete_family(family_id)
             if err:
                 st.error(err)
             else:
                 st.session_state[SESSION_ACTIVE_FAMILY_ID] = None
+                st.session_state.pop("family_selector_widget", None)
+                set_flash("Family deleted.", "warning")
                 st.rerun()
 
 
-def render_lists_tab(family_id: int) -> None:
+def render_lists_tab(family_id: int, family_name: str) -> None:
     st.markdown('<p class="section-title">Saved guest lists</p>', unsafe_allow_html=True)
+    st.caption(f"Lists for **{family_name}** only — switching family shows that family's lists.")
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -150,10 +203,13 @@ def render_lists_tab(family_id: int) -> None:
             use_container_width=True,
         )
     with col_b:
-        st.session_state[SESSION_USE_NAMED_LIST] = st.toggle(
+        use_named = use_named_list_for_family(family_id)
+        toggled = st.toggle(
             "Use saved list for Send tab",
-            value=st.session_state.get(SESSION_USE_NAMED_LIST, False),
+            value=use_named,
+            key=f"use_named_list_toggle_{family_id}",
         )
+        set_use_named_list_for_family(family_id, toggled)
 
     list_name = st.text_input("New list name", placeholder="e.g. Ranka Invitations")
     if st.button("Create list", use_container_width=True) and list_name:
@@ -161,8 +217,9 @@ def render_lists_tab(family_id: int) -> None:
         if err:
             st.error(err)
         else:
-            st.session_state[SESSION_ACTIVE_GUEST_LIST_ID] = lid
-            st.success(f"Created **{list_name}**")
+            set_active_guest_list_id(family_id, int(lid))
+            sync_list_selector_widget(family_id, list_guest_lists(family_id))
+            set_flash(f"Created list **{list_name}** in **{family_name}**.")
             st.rerun()
 
     lists = list_guest_lists(family_id)
@@ -170,38 +227,53 @@ def render_lists_tab(family_id: int) -> None:
         st.info("Create a list, then upload Excel below.")
         return
 
-    list_options = {f"{row['name']} ({row['member_count']})": row["id"] for row in lists}
-    active = st.session_state.get(SESSION_ACTIVE_GUEST_LIST_ID)
-    if active not in list_options.values():
-        active = lists[0]["id"]
-    labels = list(list_options.keys())
-    default_idx = next(
-        (i for i, label in enumerate(labels) if list_options[label] == active),
-        0,
-    )
-    chosen_label = st.selectbox("Select list", labels, index=default_idx)
-    guest_list_id = list_options[chosen_label]
-    st.session_state[SESSION_ACTIVE_GUEST_LIST_ID] = guest_list_id
+    sync_list_selector_widget(family_id, lists)
+    list_options = {f"{row['name']} ({row['member_count']})": int(row["id"]) for row in lists}
 
-    uploaded = st.file_uploader("Upload Excel to this list", type=["xlsx"], key="list_upload")
-    if uploaded and st.button("Import into list", type="primary", use_container_width=True):
+    def _on_list_change() -> None:
+        label = st.session_state[f"list_select_{family_id}"]
+        set_active_guest_list_id(family_id, list_options[label])
+
+    st.selectbox(
+        "Select list",
+        options=list(list_options.keys()),
+        key=f"list_select_{family_id}",
+        on_change=_on_list_change,
+    )
+    guest_list_id = list_options[st.session_state[f"list_select_{family_id}"]]
+    set_active_guest_list_id(family_id, guest_list_id)
+    selected_list_name = next(row["name"] for row in lists if row["id"] == guest_list_id)
+
+    uploaded = st.file_uploader(
+        "Upload Excel to this list",
+        type=["xlsx"],
+        key=f"list_upload_{family_id}_{guest_list_id}",
+    )
+    if uploaded and st.button("Save list from Excel", type="primary", use_container_width=True):
         count, err = import_excel_to_guest_list(
             guest_list_id,
             uploaded.getvalue(),
             st.session_state[SESSION_COUNTRY_CODE],
+            family_id=family_id,
         )
         if err:
             st.error(err)
         else:
-            st.success(f"Imported **{count}** guests.")
+            set_use_named_list_for_family(family_id, True)
+            set_flash(
+                f"Saved **{count}** guests to **{selected_list_name}** in **{family_name}**. "
+                "Next: write your message in **Compose**."
+            )
+            go_to_tab("Compose")
             st.rerun()
 
     members = get_guest_list_members(guest_list_id)
     st.dataframe(members, use_container_width=True, hide_index=True)
 
     if st.button("Delete this list", use_container_width=True):
-        delete_guest_list(guest_list_id)
-        st.session_state[SESSION_ACTIVE_GUEST_LIST_ID] = None
+        delete_guest_list(guest_list_id, family_id=family_id)
+        st.session_state.pop(f"list_select_{family_id}", None)
+        set_flash(f"Deleted list **{selected_list_name}**.", "warning")
         st.rerun()
 
 
@@ -222,7 +294,8 @@ def render_functions_tab(family_id: int, family_name: str) -> None:
         if err:
             st.error(err)
         else:
-            st.session_state[SESSION_ACTIVE_FUNCTION_ID] = fid
+            set_active_function_id(family_id, int(fid))
+            set_flash(f"Added function **{fn_name}**.")
             st.rerun()
 
     functions = list_functions(family_id)
@@ -230,15 +303,27 @@ def render_functions_tab(family_id: int, family_name: str) -> None:
         st.info("Add a function, then upload guests with gift quantities.")
         return
 
-    fn_map = {f"{row['name']} ({row['guest_count']} guests)": row["id"] for row in functions}
-    active_fn = st.session_state.get(SESSION_ACTIVE_FUNCTION_ID)
-    if active_fn not in fn_map.values():
-        active_fn = functions[0]["id"]
-    fn_labels = list(fn_map.keys())
-    fn_idx = next((i for i, label in enumerate(fn_labels) if fn_map[label] == active_fn), 0)
-    chosen_fn = st.selectbox("Function", fn_labels, index=fn_idx)
-    function_id = fn_map[chosen_fn]
-    st.session_state[SESSION_ACTIVE_FUNCTION_ID] = function_id
+    fn_map = {f"{row['name']} ({row['guest_count']} guests)": int(row["id"]) for row in functions}
+    function_ids = list(fn_map.values())
+    active_fn = get_active_function_id(family_id, function_ids)
+    id_to_label = {fn_id: label for label, fn_id in fn_map.items()}
+    active_label = id_to_label.get(int(active_fn), next(iter(fn_map.keys())))
+
+    def _on_function_change() -> None:
+        label = st.session_state[f"function_select_{family_id}"]
+        set_active_function_id(family_id, fn_map[label])
+
+    if st.session_state.get(f"function_select_{family_id}") != active_label:
+        st.session_state[f"function_select_{family_id}"] = active_label
+
+    st.selectbox(
+        "Function",
+        options=list(fn_map.keys()),
+        key=f"function_select_{family_id}",
+        on_change=_on_function_change,
+    )
+    function_id = fn_map[st.session_state[f"function_select_{family_id}"]]
+    set_active_function_id(family_id, function_id)
     function_name = functions[next(i for i, f in enumerate(functions) if f["id"] == function_id)]["name"]
 
     replace = st.checkbox("Replace existing guests on import", value=False)
@@ -325,7 +410,7 @@ def render_functions_tab(family_id: int, family_name: str) -> None:
 
     if st.button("Delete this function", use_container_width=True):
         delete_function(function_id)
-        st.session_state[SESSION_ACTIVE_FUNCTION_ID] = None
+        st.session_state.pop(f"function_select_{family_id}", None)
         st.rerun()
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
+from constants import WHATSAPP_APP_BUSINESS, WHATSAPP_APP_PERSONAL
 from utils import phone_for_wa_link
 
 
@@ -30,3 +31,23 @@ def api_whatsapp_link(mobile_number: str, message: str = "") -> str:
     if message.strip():
         return f"https://api.whatsapp.com/send?phone={phone}&text={quote(message)}"
     return f"https://api.whatsapp.com/send?phone={phone}"
+
+
+def wa_business_link(mobile_number: str, message: str = "") -> str:
+    """Android intent — opens WhatsApp Business when installed."""
+    phone = phone_for_wa_link(mobile_number)
+    text = quote(message) if message.strip() else ""
+    intent = f"intent://send?phone={phone}"
+    if text:
+        intent += f"&text={text}"
+    return intent + "#Intent;scheme=whatsapp;package=com.whatsapp.w4b;end"
+
+
+def whatsapp_guest_link(
+    mobile_number: str,
+    message: str = "",
+    app_type: str = WHATSAPP_APP_PERSONAL,
+) -> str:
+    if app_type == WHATSAPP_APP_BUSINESS:
+        return wa_business_link(mobile_number, message)
+    return wa_me_link(mobile_number, message)

@@ -10,7 +10,10 @@ from database import _utc_now, db_connection, invalidate_families_cache, row_to_
 def _fetch_families() -> list[dict]:
     with db_connection() as connection:
         rows = connection.execute(
-            "SELECT id, name, created_at FROM family ORDER BY name"
+            """
+            SELECT id, name, created_at, whatsapp_sender_phone, whatsapp_app_type
+            FROM family ORDER BY name
+            """
         ).fetchall()
     return [row_to_dict(row) for row in rows]  # type: ignore[misc]
 
@@ -42,24 +45,6 @@ def create_family(name: str) -> tuple[int | None, str | None]:
         return None, str(exc)
 
 
-def rename_family(family_id: int, name: str) -> str | None:
-    name = name.strip()
-    if not name:
-        return "Family name is required."
-    try:
-        with db_connection() as connection:
-            connection.execute(
-                "UPDATE family SET name = ? WHERE id = ?",
-                (name, family_id),
-            )
-        invalidate_families_cache()
-        return None
-    except Exception as exc:
-        if "UNIQUE" in str(exc):
-            return f"Family '{name}' already exists."
-        return str(exc)
-
-
 def delete_family(family_id: int) -> str | None:
     families = list_families()
     if len(families) <= 1:
@@ -71,12 +56,39 @@ def delete_family(family_id: int) -> str | None:
 
 
 def get_family(family_id: int) -> dict | None:
+    for family in list_families():
+        if family["id"] == family_id:
+            return family
     with db_connection() as connection:
         row = connection.execute(
-            "SELECT id, name, created_at FROM family WHERE id = ?",
+            """
+            SELECT id, name, created_at, whatsapp_sender_phone, whatsapp_app_type
+            FROM family WHERE id = ?
+            """,
             (family_id,),
         ).fetchone()
     return row_to_dict(row)
+
+
+def update_family_whatsapp_settings(
+    family_id: int,
+    sender_phone: str,
+    app_type: str,
+) -> str | None:
+    try:
+        with db_connection() as connection:
+            connection.execute(
+                """
+                UPDATE family
+                SET whatsapp_sender_phone = ?, whatsapp_app_type = ?
+                WHERE id = ?
+                """,
+                (sender_phone.strip(), app_type.strip(), family_id),
+            )
+        invalidate_families_cache()
+        return None
+    except Exception as exc:
+        return str(exc)
 
 
 def get_or_create_family_id(family_id: int | None) -> int:

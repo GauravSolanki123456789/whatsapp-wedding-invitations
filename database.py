@@ -23,11 +23,13 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
 );
 
-CREATE TABLE IF NOT EXISTS family (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL
-);
+    CREATE TABLE IF NOT EXISTS family (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        whatsapp_sender_phone TEXT NOT NULL DEFAULT '',
+        whatsapp_app_type TEXT NOT NULL DEFAULT 'personal'
+    );
 
 CREATE TABLE IF NOT EXISTS guest_list (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,7 +95,9 @@ _POSTGRES_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS family (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        whatsapp_sender_phone TEXT NOT NULL DEFAULT '',
+        whatsapp_app_type TEXT NOT NULL DEFAULT 'personal'
     )
     """,
     """
@@ -369,12 +373,33 @@ def _get_postgres_pool(url: str, cursor_factory: Any) -> Any:
     return _pool(url)
 
 
+def _migrate_family_columns(connection: DbConnection) -> None:
+    if is_cloud_database():
+        connection.execute(
+            "ALTER TABLE family ADD COLUMN IF NOT EXISTS whatsapp_sender_phone TEXT NOT NULL DEFAULT ''"
+        )
+        connection.execute(
+            "ALTER TABLE family ADD COLUMN IF NOT EXISTS whatsapp_app_type TEXT NOT NULL DEFAULT 'personal'"
+        )
+    else:
+        for column_sql in (
+            "ALTER TABLE family ADD COLUMN whatsapp_sender_phone TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE family ADD COLUMN whatsapp_app_type TEXT NOT NULL DEFAULT 'personal'",
+        ):
+            try:
+                connection.execute(column_sql)
+            except Exception:
+                pass
+
+
 def _run_schema_init(connection: DbConnection) -> None:
     if is_cloud_database():
         for statement in _POSTGRES_STATEMENTS:
             connection.execute(statement)
     else:
         connection._conn.executescript(_SQLITE_SCHEMA)  # noqa: SLF001
+
+    _migrate_family_columns(connection)
 
     row = connection.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
     if row is None:
@@ -496,5 +521,19 @@ def invalidate_families_cache() -> None:
         import streamlit as st
 
         st.session_state.pop("families_cache", None)
+    except Exception:
+        pass
+
+
+def invalidate_guest_lists_cache(family_id: int | None = None) -> None:
+    try:
+        import streamlit as st
+
+        if family_id is None:
+            keys = [key for key in st.session_state if key.startswith("guest_lists_cache_")]
+            for key in keys:
+                st.session_state.pop(key, None)
+        else:
+            st.session_state.pop(f"guest_lists_cache_{family_id}", None)
     except Exception:
         pass

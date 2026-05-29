@@ -47,6 +47,15 @@ SESSION_SCANNER_STAFF_NAME = "scanner_staff_name"
 
 SESSION_DB_BOOTSTRAPPED = "db_bootstrapped"
 SESSION_ACTIVE_NAV_TAB = "active_nav_tab"
+SESSION_MAIN_NAV_TAB = "main_nav_tab"
+SESSION_FLASH_MESSAGE = "ui_flash_message"
+SESSION_FLASH_TYPE = "ui_flash_type"
+
+# Per-family WhatsApp send preference
+WHATSAPP_APP_PERSONAL = "personal"
+WHATSAPP_APP_BUSINESS = "business"
+WHATSAPP_SENDER_PHONE_COLUMN = "whatsapp_sender_phone"
+WHATSAPP_APP_TYPE_COLUMN = "whatsapp_app_type"
 
 # URL query param from live QR scanner
 QUERY_PARAM_SCAN_TOKEN = "scan_token"

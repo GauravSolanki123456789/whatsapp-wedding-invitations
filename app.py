@@ -48,14 +48,14 @@ from constants import (
     SESSION_DELAY_MIN,
     SESSION_FILE_UPLOAD_KEY,
     SESSION_ACTIVE_FAMILY_ID,
-    SESSION_ACTIVE_GUEST_LIST_ID,
+    SESSION_MAIN_NAV_TAB,
     SESSION_GUEST_LIST,
     SESSION_GUEST_LIST_LOADED,
     SESSION_MANUAL_SENT,
-    SESSION_USE_NAMED_LIST,
     SESSION_MESSAGE,
     SESSION_SEND_LOG,
     SESSION_SEND_MODE,
+    WHATSAPP_APP_BUSINESS,
     STATUS_FAILED,
     STATUS_SENT,
     VIDEO_EXTENSIONS,
@@ -65,10 +65,10 @@ from group_contacts import (
     group_creation_summary_rows,
     numbers_for_clipboard,
 )
-from guest_store import load_guest_list, save_guest_list
+from guest_store import load_guest_list
 from guided_send import cooldown_remaining, next_pending_guest, start_cooldown
 from hosting import auto_send_available, default_send_mode
-from wa_links import wa_me_link
+from wa_links import wa_me_link, whatsapp_guest_link
 from utils import (
     attachment_size_label,
     count_invalid_numbers,
@@ -87,6 +87,19 @@ from whatsapp_service import (
 )
 from database import ensure_database_ready
 from family_service import get_family
+from family_state import (
+    get_family_guest_df,
+    get_family_message,
+    get_family_manual_sent,
+    go_to_tab,
+    mark_family_manual_sent,
+    render_flash,
+    reset_family_manual_sent,
+    set_family_guest_df,
+    set_family_message,
+    set_flash,
+    use_named_list_for_family,
+)
 from named_guest_list_service import get_guest_list_members, members_to_mobile_numbers
 from ui_pages import (
     render_database_status,
@@ -134,8 +147,7 @@ def init_session_state() -> None:
         SESSION_GUIDED_COOLDOWN_UNTIL: 0,
         SESSION_ATTACHMENT_BYTES: None,
         SESSION_ACTIVE_FAMILY_ID: None,
-        SESSION_ACTIVE_GUEST_LIST_ID: None,
-        SESSION_USE_NAMED_LIST: False,
+        SESSION_MAIN_NAV_TAB: "Guests",
     }
     db_error = ensure_database_ready(st.session_state)
     if db_error:
@@ -213,37 +225,52 @@ def render_sidebar() -> None:
         )
 
 
-def render_upload_section() -> None:
+def render_upload_section(family_id: int, family_name: str) -> None:
     st.markdown('<p class="section-title">Upload guest list</p>', unsafe_allow_html=True)
+    st.caption(f"Guests for **{family_name}** — other families keep their own numbers.")
 
     uploaded_file = st.file_uploader(
         "Choose an Excel file (.xlsx)",
         type=["xlsx"],
-        key=f"upload_{st.session_state[SESSION_FILE_UPLOAD_KEY]}",
+        key=f"upload_{family_id}_{st.session_state[SESSION_FILE_UPLOAD_KEY]}",
         help="Column 2 = mobile numbers. Column 1 is ignored.",
     )
 
     if uploaded_file is not None:
-        try:
-            guest_list = extract_mobile_numbers_from_excel(
-                uploaded_file.getvalue(),
-                st.session_state[SESSION_COUNTRY_CODE],
-            )
-            st.session_state[SESSION_GUEST_LIST] = guest_list
-            save_guest_list(guest_list)
-            count = len(guest_list)
-            if count:
-                st.success(f"Loaded **{count}** number{'s' if count != 1 else ''}.")
-            else:
-                st.warning("No valid numbers in column 2.")
-        except Exception as exc:
-            st.error(f"Could not read the Excel file: {exc}")
+        upload_token = f"{uploaded_file.name}:{uploaded_file.size}"
+        last_token_key = f"last_guest_upload_token_{family_id}"
+        if st.session_state.get(last_token_key) != upload_token:
+            try:
+                guest_list = extract_mobile_numbers_from_excel(
+                    uploaded_file.getvalue(),
+                    st.session_state[SESSION_COUNTRY_CODE],
+                )
+                set_family_guest_df(family_id, guest_list)
+                st.session_state[last_token_key] = upload_token
+                count = len(guest_list)
+                if count:
+                    set_flash(
+                        f"Loaded **{count}** number{'s' if count != 1 else ''} "
+                        f"for **{family_name}**. Next: write your message in **Compose**."
+                    )
+                    st.session_state[f"prompt_compose_{family_id}"] = True
+                else:
+                    set_flash("No valid numbers in column 2.", "warning")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Could not read the Excel file: {exc}")
+
+    if st.session_state.get(f"prompt_compose_{family_id}"):
+        if st.button("Continue to Compose →", type="primary", use_container_width=True):
+            st.session_state.pop(f"prompt_compose_{family_id}", None)
+            go_to_tab("Compose")
+            st.rerun()
 
 
-def render_guest_editor() -> None:
+def render_guest_editor(family_id: int) -> None:
     st.markdown('<p class="section-title">Review numbers</p>', unsafe_allow_html=True)
 
-    guest_list: pd.DataFrame = st.session_state[SESSION_GUEST_LIST]
+    guest_list: pd.DataFrame = get_family_guest_df(family_id)
     if guest_list.empty:
         st.info("Upload Excel or add numbers below.")
         guest_list = pd.DataFrame({MOBILE_NUMBER_COLUMN: [""]})
@@ -261,11 +288,10 @@ def render_guest_editor() -> None:
                 width="large",
             ),
         },
-        key="guest_data_editor",
+        key=f"guest_data_editor_{family_id}",
     )
 
-    st.session_state[SESSION_GUEST_LIST] = edited_guest_list
-    save_guest_list(edited_guest_list)
+    set_family_guest_df(family_id, edited_guest_list)
 
     finalized_numbers = guest_list_from_dataframe(edited_guest_list)
     invalid_count = count_invalid_numbers(finalized_numbers)
@@ -281,16 +307,17 @@ def render_guest_editor() -> None:
     )
 
     if st.button("Clear list", use_container_width=True):
-        st.session_state[SESSION_GUEST_LIST] = pd.DataFrame(columns=[MOBILE_NUMBER_COLUMN])
+        set_family_guest_df(family_id, pd.DataFrame(columns=[MOBILE_NUMBER_COLUMN]))
         st.session_state[SESSION_FILE_UPLOAD_KEY] += 1
-        save_guest_list(st.session_state[SESSION_GUEST_LIST])
+        st.session_state.pop(f"last_guest_upload_token_{family_id}", None)
+        set_flash("Guest list cleared.", "info")
         st.rerun()
 
 
-def render_group_section() -> None:
+def render_group_section(family_id: int) -> None:
     st.markdown('<p class="section-title">WhatsApp group</p>', unsafe_allow_html=True)
 
-    mobile_numbers = collect_mobile_numbers()
+    mobile_numbers = collect_mobile_numbers(family_id)
     guest_count = len(mobile_numbers)
     invalid_count = count_invalid_numbers(mobile_numbers)
 
@@ -474,16 +501,12 @@ def save_manual_sent_numbers(numbers: set[str]) -> None:
         json.dump({"mobile_numbers": sorted(numbers)}, file_handle, ensure_ascii=False, indent=2)
 
 
-def mark_manual_sent(mobile_number: str) -> None:
-    sent = set(st.session_state.get(SESSION_MANUAL_SENT, set()))
-    sent.add(mobile_number)
-    st.session_state[SESSION_MANUAL_SENT] = sent
-    save_manual_sent_numbers(sent)
+def mark_manual_sent(family_id: int, mobile_number: str) -> None:
+    mark_family_manual_sent(family_id, mobile_number)
 
 
-def reset_manual_progress() -> None:
-    st.session_state[SESSION_MANUAL_SENT] = set()
-    save_manual_sent_numbers(set())
+def reset_manual_progress(family_id: int) -> None:
+    reset_family_manual_sent(family_id)
 
 
 def get_attachment_download_data() -> tuple[bytes | None, str | None]:
@@ -578,8 +601,9 @@ def render_attachment_preview(attachment_path: str, attachment_name: str) -> Non
         st.markdown("📎 **Attachment**")
 
 
-def render_message_section() -> None:
+def render_message_section(family_id: int, family_name: str) -> None:
     st.markdown('<p class="section-title">Invitation</p>', unsafe_allow_html=True)
+    st.caption(f"Message for **{family_name}** invitations.")
     st.markdown(
         """
         <div class="notice-box tip-box">
@@ -591,13 +615,20 @@ def render_message_section() -> None:
         unsafe_allow_html=True,
     )
 
+    msg_key = f"compose_message_{family_id}"
+    if msg_key not in st.session_state:
+        st.session_state[msg_key] = get_family_message(family_id) or st.session_state.get(
+            SESSION_MESSAGE, ""
+        )
+
     message = st.text_area(
         "Message",
-        value=st.session_state[SESSION_MESSAGE],
         height=140,
         placeholder="Your wedding invitation text…",
         label_visibility="collapsed",
+        key=msg_key,
     )
+    set_family_message(family_id, message)
     st.session_state[SESSION_MESSAGE] = message
     st.caption(f"{len(message)} characters")
 
@@ -629,21 +660,60 @@ def render_message_section() -> None:
             remove_current_attachment()
             st.rerun()
 
+    col_save, col_send = st.columns(2)
+    with col_save:
+        if st.button("Save message", use_container_width=True):
+            save_last_compose(
+                st.session_state[msg_key],
+                st.session_state.get(SESSION_ATTACHMENT_PATH),
+                st.session_state.get(SESSION_ATTACHMENT_NAME),
+            )
+            set_flash(f"Message saved for **{family_name}**.")
+            st.rerun()
+    with col_send:
+        if st.button("Continue to Send →", type="primary", use_container_width=True):
+            current_message = st.session_state[msg_key].strip()
+            has_attachment = bool(st.session_state.get(SESSION_ATTACHMENT_BYTES)) or bool(
+                st.session_state.get(SESSION_ATTACHMENT_PATH)
+            )
+            if not current_message and not has_attachment:
+                st.warning("Write a message or attach a file first.")
+            else:
+                save_last_compose(
+                    st.session_state[msg_key],
+                    st.session_state.get(SESSION_ATTACHMENT_PATH),
+                    st.session_state.get(SESSION_ATTACHMENT_NAME),
+                )
+                set_flash("Ready to send — review guests in **Send**.")
+                go_to_tab("Send")
+                st.rerun()
 
-def render_send_section() -> None:
+
+def render_send_section(family_id: int, family: dict | None) -> None:
     st.markdown('<p class="section-title">Send</p>', unsafe_allow_html=True)
 
-    if st.session_state.get(SESSION_USE_NAMED_LIST):
+    if use_named_list_for_family(family_id):
         st.caption("Numbers come from your **Lists** tab (saved list).")
     else:
         st.caption("Numbers come from **Guests** tab. Enable saved list in **Lists**.")
 
-    message = st.session_state[SESSION_MESSAGE].strip()
+    wa_app = (family or {}).get("whatsapp_app_type") or "personal"
+    wa_sender = (family or {}).get("whatsapp_sender_phone") or ""
+    if wa_sender:
+        app_label = "WhatsApp Business" if wa_app == WHATSAPP_APP_BUSINESS else "WhatsApp"
+        st.info(f"Use **{app_label}** logged in as **{wa_sender}** for this family.")
+    if wa_app == WHATSAPP_APP_BUSINESS:
+        st.caption(
+            "Android opens WhatsApp Business via the Send button. "
+            "On iPhone, open WhatsApp Business once before tapping Send."
+        )
+
+    message = get_family_message(family_id).strip() or st.session_state[SESSION_MESSAGE].strip()
     attachment_name = st.session_state.get(SESSION_ATTACHMENT_NAME)
     attachment_path = st.session_state.get(SESSION_ATTACHMENT_PATH)
-    mobile_numbers = collect_mobile_numbers()
+    mobile_numbers = collect_mobile_numbers(family_id)
     guest_count = len(mobile_numbers)
-    sent_manual = st.session_state.get(SESSION_MANUAL_SENT, set())
+    sent_manual = get_family_manual_sent(family_id)
 
     send_options = [SEND_MODE_GUIDED, SEND_MODE_QUICK]
     if auto_send_available():
@@ -663,6 +733,8 @@ def render_send_section() -> None:
 
     if send_mode == SEND_MODE_GUIDED:
         render_guided_send_panel(
+            family_id=family_id,
+            wa_app_type=wa_app,
             mobile_numbers=mobile_numbers,
             message=message,
             attachment_name=attachment_name,
@@ -672,6 +744,8 @@ def render_send_section() -> None:
         )
     elif send_mode == SEND_MODE_QUICK:
         render_quick_send_panel(
+            family_id=family_id,
+            wa_app_type=wa_app,
             mobile_numbers=mobile_numbers,
             message=message,
             attachment_name=attachment_name,
@@ -681,6 +755,7 @@ def render_send_section() -> None:
         )
     else:
         render_auto_send_panel(
+            family_id=family_id,
             mobile_numbers=mobile_numbers,
             message=message,
             attachment_name=attachment_name,
@@ -690,6 +765,8 @@ def render_send_section() -> None:
 
 
 def render_guided_send_panel(
+    family_id: int,
+    wa_app_type: str,
     mobile_numbers: list[str],
     message: str,
     attachment_name: str | None,
@@ -730,7 +807,7 @@ def render_guided_send_panel(
     if not number:
         st.success(f"All done — **{sent_count}** invitation{'s' if sent_count != 1 else ''} sent.")
         if st.button("Reset progress", use_container_width=True):
-            reset_manual_progress()
+            reset_manual_progress(family_id)
             st.session_state[SESSION_GUIDED_COOLDOWN_UNTIL] = 0
             st.rerun()
         return
@@ -758,24 +835,32 @@ def render_guided_send_panel(
 
     st.link_button(
         "Open WhatsApp",
-        wa_me_link(number, message),
+        whatsapp_guest_link(number, message, wa_app_type),
         use_container_width=True,
     )
+    if wa_app_type == WHATSAPP_APP_BUSINESS:
+        st.link_button(
+            "Open via wa.me (fallback)",
+            wa_me_link(number, message),
+            use_container_width=True,
+        )
 
     if st.button("Done — next guest", type="primary", use_container_width=True, key="guided_next"):
-        mark_manual_sent(number)
+        mark_manual_sent(family_id, number)
         if pending > 1 and (delay_min > 0 or delay_max > 0):
             pause = start_cooldown(st.session_state, delay_min, delay_max)
             st.toast(f"Pause {int(pause)}s before next guest")
         st.rerun()
 
     if st.button("Reset progress", use_container_width=True):
-        reset_manual_progress()
+        reset_manual_progress(family_id)
         st.session_state[SESSION_GUIDED_COOLDOWN_UNTIL] = 0
         st.rerun()
 
 
 def render_quick_send_panel(
+    family_id: int,
+    wa_app_type: str,
     mobile_numbers: list[str],
     message: str,
     attachment_name: str | None,
@@ -804,17 +889,22 @@ def render_quick_send_panel(
             with col_a:
                 st.markdown(f"{status} `{mobile_number}`")
             with col_b:
-                st.link_button("Open", wa_me_link(mobile_number, message), use_container_width=True)
+                st.link_button(
+                    "Open",
+                    whatsapp_guest_link(mobile_number, message, wa_app_type),
+                    use_container_width=True,
+                )
             if not is_sent and st.button("Mark sent", key=f"mark_sent_{mobile_number}", use_container_width=True):
-                mark_manual_sent(mobile_number)
+                mark_manual_sent(family_id, mobile_number)
                 st.rerun()
 
     if st.button("Reset progress", use_container_width=True):
-        reset_manual_progress()
+        reset_manual_progress(family_id)
         st.rerun()
 
 
 def render_auto_send_panel(
+    family_id: int,
     mobile_numbers: list[str],
     message: str,
     attachment_name: str | None,
@@ -855,21 +945,26 @@ def render_auto_send_panel(
         send_clicked = st.button("Auto send · all guests", type="primary", use_container_width=True)
 
     if test_clicked:
-        run_send_flow(test_only=True)
+        run_send_flow(family_id, test_only=True)
     if send_clicked:
-        run_send_flow(test_only=False)
+        run_send_flow(family_id, test_only=False)
 
 
-def collect_mobile_numbers() -> list[str]:
-    if st.session_state.get(SESSION_USE_NAMED_LIST) and st.session_state.get(
-        SESSION_ACTIVE_GUEST_LIST_ID
-    ):
-        members = get_guest_list_members(st.session_state[SESSION_ACTIVE_GUEST_LIST_ID])
-        numbers = members_to_mobile_numbers(members, st.session_state[SESSION_COUNTRY_CODE])
-        if numbers:
-            return numbers
+def collect_mobile_numbers(family_id: int) -> list[str]:
+    from family_state import get_active_guest_list_id
+    from named_guest_list_service import list_guest_lists
 
-    guest_list = st.session_state[SESSION_GUEST_LIST]
+    if use_named_list_for_family(family_id):
+        lists = list_guest_lists(family_id)
+        list_ids = [int(row["id"]) for row in lists]
+        list_id = get_active_guest_list_id(family_id, list_ids)
+        if list_id:
+            members = get_guest_list_members(list_id)
+            numbers = members_to_mobile_numbers(members, st.session_state[SESSION_COUNTRY_CODE])
+            if numbers:
+                return numbers
+
+    guest_list = get_family_guest_df(family_id)
     country_code = st.session_state[SESSION_COUNTRY_CODE]
     normalized_rows = []
     for raw_value in guest_list_from_dataframe(guest_list):
@@ -878,10 +973,10 @@ def collect_mobile_numbers() -> list[str]:
     return [number for number in normalized_rows if number]
 
 
-def run_send_flow(test_only: bool = False) -> None:
-    message = st.session_state[SESSION_MESSAGE].strip()
+def run_send_flow(family_id: int, test_only: bool = False) -> None:
+    message = get_family_message(family_id).strip() or st.session_state[SESSION_MESSAGE].strip()
     attachment_path = st.session_state.get(SESSION_ATTACHMENT_PATH)
-    mobile_numbers = collect_mobile_numbers()
+    mobile_numbers = collect_mobile_numbers(family_id)
 
     if not validate_before_send(mobile_numbers, message, attachment_path):
         return
@@ -1028,38 +1123,41 @@ def main() -> None:
 
     render_sidebar()
     render_hero()
+    render_flash()
 
     render_database_status()
     family_id = render_family_selector()
     family = get_family(family_id)
     family_name = family["name"] if family else "Family"
 
-    if st.session_state.get(SESSION_USE_NAMED_LIST):
+    if use_named_list_for_family(family_id):
         st.markdown(
             '<span class="stat-pill stat-pill--ok">Using saved list for Send</span>',
             unsafe_allow_html=True,
         )
 
     nav_labels = ["Guests", "Lists", "Compose", "Send", "Gifts", "Scan", "Reports", "Settings"]
+    if SESSION_MAIN_NAV_TAB not in st.session_state:
+        st.session_state[SESSION_MAIN_NAV_TAB] = "Guests"
     active_tab = st.radio(
         "Section",
         nav_labels,
         horizontal=True,
         label_visibility="collapsed",
-        key="main_nav_tab",
+        key=SESSION_MAIN_NAV_TAB,
     )
 
     with st.container(border=True):
         if active_tab == "Guests":
-            render_upload_section()
+            render_upload_section(family_id, family_name)
             st.divider()
-            render_guest_editor()
+            render_guest_editor(family_id)
         elif active_tab == "Lists":
-            render_lists_tab(family_id)
+            render_lists_tab(family_id, family_name)
         elif active_tab == "Compose":
-            render_message_section()
+            render_message_section(family_id, family_name)
         elif active_tab == "Send":
-            render_send_section()
+            render_send_section(family_id, family)
             render_send_log()
         elif active_tab == "Gifts":
             render_functions_tab(family_id, family_name)
@@ -1070,7 +1168,7 @@ def main() -> None:
         elif active_tab == "Settings":
             render_families_tab(family_id)
             st.divider()
-            render_group_section()
+            render_group_section(family_id)
             render_group_log()
             st.divider()
             render_integrations_tab()

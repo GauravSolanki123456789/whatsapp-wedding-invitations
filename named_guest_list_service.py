@@ -7,12 +7,12 @@ from typing import Any
 
 import pandas as pd
 
-from database import _utc_now, db_connection, row_to_dict
+from database import _utc_now, db_connection, invalidate_guest_lists_cache, row_to_dict
 from constants import GUEST_NAME_COLUMN, GIFT_QUANTITY_COLUMN, MOBILE_NUMBER_COLUMN
 from utils import normalize_mobile_number
 
 
-def list_guest_lists(family_id: int) -> list[dict]:
+def _fetch_guest_lists(family_id: int) -> list[dict]:
     with db_connection() as connection:
         rows = connection.execute(
             """
@@ -29,6 +29,18 @@ def list_guest_lists(family_id: int) -> list[dict]:
     return [row_to_dict(row) for row in rows]  # type: ignore[misc]
 
 
+def list_guest_lists(family_id: int) -> list[dict]:
+    import streamlit as st
+
+    cache_key = f"guest_lists_cache_{family_id}"
+    cached = st.session_state.get(cache_key)
+    if cached is not None:
+        return cached
+    lists = _fetch_guest_lists(family_id)
+    st.session_state[cache_key] = lists
+    return lists
+
+
 def create_guest_list(family_id: int, name: str) -> tuple[int | None, str | None]:
     name = name.strip()
     if not name:
@@ -39,6 +51,7 @@ def create_guest_list(family_id: int, name: str) -> tuple[int | None, str | None
                 "INSERT INTO guest_list (family_id, name, created_at) VALUES (?, ?, ?)",
                 (family_id, name, _utc_now()),
             )
+            invalidate_guest_lists_cache(family_id)
             return int(cursor.lastrowid), None
     except Exception as exc:
         if "UNIQUE" in str(exc):
@@ -46,9 +59,13 @@ def create_guest_list(family_id: int, name: str) -> tuple[int | None, str | None
         return None, str(exc)
 
 
-def delete_guest_list(guest_list_id: int) -> None:
+def delete_guest_list(guest_list_id: int, family_id: int | None = None) -> None:
     with db_connection() as connection:
         connection.execute("DELETE FROM guest_list WHERE id = ?", (guest_list_id,))
+    if family_id is not None:
+        invalidate_guest_lists_cache(family_id)
+    else:
+        invalidate_guest_lists_cache()
 
 
 def get_guest_list_members(guest_list_id: int) -> pd.DataFrame:
@@ -102,6 +119,7 @@ def import_excel_to_guest_list(
     guest_list_id: int,
     file_bytes: bytes,
     country_code: str,
+    family_id: int | None = None,
 ) -> tuple[int, str | None]:
     buffer = io.BytesIO(file_bytes)
     dataframe = pd.read_excel(buffer, engine="openpyxl", header=0)
@@ -145,6 +163,7 @@ def import_excel_to_guest_list(
             unique.append(member)
 
     replace_guest_list_members(guest_list_id, unique)
+    invalidate_guest_lists_cache(family_id)
     return len(unique), None
 
 
