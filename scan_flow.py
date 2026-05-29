@@ -8,10 +8,12 @@ import streamlit as st
 
 from constants import (
     QUERY_PARAM_SCAN_TOKEN,
+    SESSION_LAST_COMPONENT_SCAN,
     SESSION_LAST_PROCESSED_SCAN_PAYLOAD,
     SESSION_LAST_SCAN_TOKEN,
     SESSION_SCAN_LOOKUP_GUEST,
     SESSION_SCAN_PHOTO_KEY,
+    SESSION_SCAN_COMPONENT_KEY,
     SESSION_SCAN_PASTE_KEY,
     SESSION_SCAN_UPLOAD_KEY,
     SESSION_SCANNER_STAFF_NAME,
@@ -83,11 +85,15 @@ def clear_scan_for_next_guest() -> None:
     """Reset scan UI so staff can scan the next guest immediately."""
     st.session_state.pop(SESSION_SCAN_LOOKUP_GUEST, None)
     st.session_state.pop(SESSION_LAST_SCAN_TOKEN, None)
+    st.session_state.pop(SESSION_LAST_COMPONENT_SCAN, None)
     st.session_state.pop(SESSION_LAST_PROCESSED_SCAN_PAYLOAD, None)
     st.session_state.pop("scan_last_error", None)
     st.session_state[SESSION_SCAN_PHOTO_KEY] = int(st.session_state.get(SESSION_SCAN_PHOTO_KEY, 0)) + 1
     st.session_state[SESSION_SCAN_UPLOAD_KEY] = int(st.session_state.get(SESSION_SCAN_UPLOAD_KEY, 0)) + 1
     st.session_state[SESSION_SCAN_PASTE_KEY] = int(st.session_state.get(SESSION_SCAN_PASTE_KEY, 0)) + 1
+    st.session_state[SESSION_SCAN_COMPONENT_KEY] = int(
+        st.session_state.get(SESSION_SCAN_COMPONENT_KEY, 0)
+    ) + 1
     st.session_state.pop("scan_last_paste_attempt", None)
     if QUERY_PARAM_SCAN_TOKEN in st.query_params:
         try:
@@ -97,6 +103,25 @@ def clear_scan_for_next_guest() -> None:
                 st.query_params.clear()
             except Exception:
                 pass
+
+
+def handle_live_scan_result(scanned: str | None) -> bool:
+    """Apply live scanner token; returns True if guest loaded and caller should rerun."""
+    if not scanned:
+        return False
+    if scanned == st.session_state.get(SESSION_LAST_COMPONENT_SCAN):
+        return False
+    st.session_state[SESSION_LAST_COMPONENT_SCAN] = scanned
+    token = parse_scanned_payload(scanned)
+    if not token:
+        st.session_state["scan_last_error"] = "Could not read a valid QR code."
+        return False
+    error = apply_scan_raw(scanned)
+    if error:
+        st.session_state["scan_last_error"] = error
+        return False
+    st.session_state.pop("scan_last_error", None)
+    return True
 
 
 def confirm_handout(guest_id: int, gifts_now: int, notes: str) -> tuple[bool, str]:

@@ -15,6 +15,7 @@ from constants import (
     SESSION_ACTIVE_FUNCTION_ID,
     SESSION_ACTIVE_GUEST_LIST_ID,
     SESSION_COUNTRY_CODE,
+    SESSION_SCAN_COMPONENT_KEY,
     SESSION_SCAN_LOOKUP_GUEST,
     SESSION_SCAN_PASTE_KEY,
     SESSION_SCAN_PHOTO_KEY,
@@ -46,7 +47,7 @@ from scan_flow import (
     apply_scan_raw,
     clear_scan_for_next_guest,
     confirm_handout,
-    consume_query_param_scan,
+    handle_live_scan_result,
     process_image_bytes,
 )
 from scanner_component import render_live_qr_scanner
@@ -327,8 +328,6 @@ def _on_manual_scan_token() -> None:
 
 
 def render_scan_tab() -> None:
-    consume_query_param_scan()
-
     st.markdown('<p class="section-title">Staff scan</p>', unsafe_allow_html=True)
 
     guest = st.session_state.get(SESSION_SCAN_LOOKUP_GUEST)
@@ -340,8 +339,8 @@ def render_scan_tab() -> None:
     st.markdown(
         """
         <div class="notice-box tip-box scan-hint">
-          Point the <strong>live scanner</strong> at the guest QR — guest opens automatically.
-          If that fails, use <strong>photo backup</strong> below.
+          Tap <strong>Start scanner</strong> — back camera opens. Guest loads instantly on scan.
+          Backup: photo or paste below.
         </div>
         """,
         unsafe_allow_html=True,
@@ -360,7 +359,10 @@ def render_scan_tab() -> None:
     if scan_error:
         st.error(scan_error)
 
-    render_live_qr_scanner()
+    component_key = f"qr_live_{st.session_state.get(SESSION_SCAN_COMPONENT_KEY, 0)}"
+    scanned = render_live_qr_scanner(key=component_key)
+    if handle_live_scan_result(scanned):
+        st.rerun()
 
     with st.expander("Photo or paste backup", expanded=False):
         st.caption("Use when live scan or camera permission fails.")

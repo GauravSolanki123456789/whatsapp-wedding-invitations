@@ -40,6 +40,8 @@ SESSION_LAST_PROCESSED_SCAN_PAYLOAD = "last_processed_scan_payload"
 SESSION_SCAN_PHOTO_KEY = "scan_photo_key"
 SESSION_SCAN_UPLOAD_KEY = "scan_upload_key"
 SESSION_SCAN_PASTE_KEY = "scan_paste_key"
+SESSION_SCAN_COMPONENT_KEY = "scan_component_key"
+SESSION_LAST_COMPONENT_SCAN = "last_component_scan"
 SESSION_USE_NAMED_LIST = "use_named_guest_list"
 SESSION_SCANNER_STAFF_NAME = "scanner_staff_name"
 

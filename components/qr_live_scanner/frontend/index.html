@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      margin: 0;
+      padding: 8px 6px 10px;
+      background: #FFFBF7;
+      color: #2C2416;
+    }
+    #reader {
+      width: 100%;
+      border-radius: 14px;
+      overflow: hidden;
+      min-height: 240px;
+      background: #111;
+    }
+    #status {
+      font-size: 0.86rem;
+      color: #6B5B52;
+      margin: 8px 0;
+      text-align: center;
+      min-height: 1.4em;
+      line-height: 1.35;
+    }
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 14px 12px;
+      margin: 5px 0;
+      border-radius: 12px;
+      border: none;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #b76e79, #9e5560);
+      color: #fff;
+    }
+    .btn-secondary {
+      background: #fff;
+      color: #5c3d42;
+      border: 1px solid rgba(183, 110, 121, 0.35);
+    }
+  </style>
+</head>
+<body>
+  <div id="reader"></div>
+  <p id="status">Tap <strong>Start scanner</strong> — uses <strong>back camera</strong></p>
+  <button type="button" class="btn btn-primary" id="btnStart">Start scanner</button>
+  <button type="button" class="btn btn-secondary" id="btnStop" style="display:none;">Stop scanner</button>
+
+  <script>
+    /* Streamlit custom component bridge (no full page reload) */
+    function sendToStreamlit(value) {
+      window.parent.postMessage(
+        {
+          isStreamlitMessage: true,
+          type: "streamlit:setComponentValue",
+          value: value,
+        },
+        "*"
+      );
+    }
+
+    function setFrameHeight() {
+      const height = Math.max(document.body.scrollHeight, 400);
+      window.parent.postMessage(
+        {
+          isStreamlitMessage: true,
+          type: "streamlit:setFrameHeight",
+          height: height,
+        },
+        "*"
+      );
+    }
+
+    let html5QrCode = null;
+    let running = false;
+    let sentToken = null;
+    const statusEl = document.getElementById("status");
+
+    function pickBackCameraId(devices) {
+      if (!devices || !devices.length) return null;
+      const backPatterns = [/back/i, /rear/i, /environment/i, /rück/i, /arrière/i, /trás/i];
+      for (const pattern of backPatterns) {
+        const match = devices.find(function (d) {
+          return pattern.test(d.label || "");
+        });
+        if (match) return match.id;
+      }
+      /* Mobile: front cam is usually first, back cam is last */
+      if (devices.length >= 2) {
+        return devices[devices.length - 1].id;
+      }
+      return devices[0].id;
+    }
+
+    async function resolveBackCamera() {
+      try {
+        const devices = await Html5Qrcode.getCameras();
+        if (devices && devices.length) {
+          const backId = pickBackCameraId(devices);
+          if (backId) return backId;
+        }
+      } catch (e) {
+        /* fall through to facingMode */
+      }
+      return { facingMode: { ideal: "environment" } };
+    }
+
+    function onScanSuccess(decodedText) {
+      const token = (decodedText || "").trim();
+      if (!token || token === sentToken) return;
+      sentToken = token;
+      statusEl.textContent = "QR found — loading guest…";
+      sendToStreamlit(token);
+      stopScanner(false);
+    }
+
+    async function startScanner() {
+      if (running) return;
+      statusEl.textContent = "Opening back camera…";
+      html5QrCode = null;
+      const boxSize = Math.min(280, Math.max(180, window.innerWidth - 48));
+      const config = {
+        fps: 14,
+        qrbox: { width: boxSize, height: boxSize },
+        aspectRatio: 1.0,
+        disableFlip: false,
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+      };
+      const onSuccess = onScanSuccess;
+      const onFailure = function () {};
+
+      async function tryStart(camera) {
+        if (html5QrCode) {
+          try {
+            await html5QrCode.stop();
+          } catch (e) {}
+          try {
+            await html5QrCode.clear();
+          } catch (e) {}
+        }
+        html5QrCode = new Html5Qrcode("reader");
+        await html5QrCode.start(camera, config, onSuccess, onFailure);
+      }
+
+      try {
+        /* 1) Force rear camera via facingMode (best on iPhone / Android) */
+        await tryStart({ facingMode: { exact: "environment" } });
+      } catch (err1) {
+        try {
+          /* 2) Pick rear device by ID from camera list */
+          const camera = await resolveBackCamera();
+          await tryStart(camera);
+        } catch (err2) {
+          try {
+            /* 3) Soft preference for environment */
+            await tryStart({ facingMode: "environment" });
+          } catch (err3) {
+            statusEl.textContent =
+              "Back camera failed. Allow camera access, then retry — or use photo backup below.";
+            console.error(err3);
+            return;
+          }
+        }
+      }
+
+      running = true;
+      statusEl.textContent = "Back camera on — hold QR in the box";
+      document.getElementById("btnStart").style.display = "none";
+      document.getElementById("btnStop").style.display = "block";
+      setFrameHeight();
+    }
+
+    async function stopScanner(showStopped) {
+      if (showStopped === undefined) showStopped = true;
+      if (html5QrCode && running) {
+        try {
+          await html5QrCode.stop();
+          await html5QrCode.clear();
+        } catch (e) {}
+        running = false;
+        if (showStopped) {
+          statusEl.textContent = "Scanner stopped";
+        }
+        document.getElementById("btnStart").style.display = "block";
+        document.getElementById("btnStop").style.display = "none";
+        setFrameHeight();
+      }
+    }
+
+    document.getElementById("btnStart").addEventListener("click", startScanner);
+    document.getElementById("btnStop").addEventListener("click", function () {
+      stopScanner(true);
+    });
+
+    setFrameHeight();
+    window.addEventListener("resize", setFrameHeight);
+
+    window.parent.postMessage(
+      { isStreamlitMessage: true, type: "streamlit:componentReady" },
+      "*"
+    );
+  </script>
+</body>
+</html>
