@@ -6,7 +6,7 @@ from pathlib import Path
 
 import streamlit.components.v1 as components
 
-_COMPONENT_DIR = Path(__file__).parent / "components" / "qr_live_scanner"
+_COMPONENT_DIR = Path(__file__).parent / "components" / "qr_live_scanner" / "frontend"
 _qr_live_scanner = components.declare_component(
     "qr_live_scanner",
     path=str(_COMPONENT_DIR),

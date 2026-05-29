@@ -111,7 +111,6 @@ def handle_live_scan_result(scanned: str | None) -> bool:
         return False
     if scanned == st.session_state.get(SESSION_LAST_COMPONENT_SCAN):
         return False
-    st.session_state[SESSION_LAST_COMPONENT_SCAN] = scanned
     token = parse_scanned_payload(scanned)
     if not token:
         st.session_state["scan_last_error"] = "Could not read a valid QR code."
@@ -120,6 +119,7 @@ def handle_live_scan_result(scanned: str | None) -> bool:
     if error:
         st.session_state["scan_last_error"] = error
         return False
+    st.session_state[SESSION_LAST_COMPONENT_SCAN] = scanned
     st.session_state.pop("scan_last_error", None)
     return True
 

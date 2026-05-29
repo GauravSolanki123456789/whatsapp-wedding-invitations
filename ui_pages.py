@@ -325,6 +325,7 @@ def _on_manual_scan_token() -> None:
         st.session_state["scan_last_error"] = error
     else:
         st.session_state.pop("scan_last_error", None)
+        st.rerun()
 
 
 def render_scan_tab() -> None:

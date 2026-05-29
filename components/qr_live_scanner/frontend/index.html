@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="https://unpkg.com/streamlit-component-lib@2.0.0/dist/streamlit-component-lib.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -17,8 +18,11 @@
       width: 100%;
       border-radius: 14px;
       overflow: hidden;
-      min-height: 240px;
+      min-height: 260px;
       background: #111;
+    }
+    #reader video {
+      object-fit: cover !important;
     }
     #status {
       font-size: 0.86rem;
@@ -52,132 +56,145 @@
 </head>
 <body>
   <div id="reader"></div>
-  <p id="status">Tap <strong>Start scanner</strong> — uses <strong>back camera</strong></p>
+  <p id="status">Tap <strong>Start scanner</strong> — rear camera for QR</p>
   <button type="button" class="btn btn-primary" id="btnStart">Start scanner</button>
   <button type="button" class="btn btn-secondary" id="btnStop" style="display:none;">Stop scanner</button>
 
   <script>
-    /* Streamlit custom component bridge (no full page reload) */
-    function sendToStreamlit(value) {
-      window.parent.postMessage(
-        {
-          isStreamlitMessage: true,
-          type: "streamlit:setComponentValue",
-          value: value,
-        },
-        "*"
-      );
-    }
-
-    function setFrameHeight() {
-      const height = Math.max(document.body.scrollHeight, 400);
-      window.parent.postMessage(
-        {
-          isStreamlitMessage: true,
-          type: "streamlit:setFrameHeight",
-          height: height,
-        },
-        "*"
-      );
-    }
-
     let html5QrCode = null;
     let running = false;
     let sentToken = null;
     const statusEl = document.getElementById("status");
 
-    function pickBackCameraId(devices) {
-      if (!devices || !devices.length) return null;
-      const backPatterns = [/back/i, /rear/i, /environment/i, /rück/i, /arrière/i, /trás/i];
-      for (const pattern of backPatterns) {
-        const match = devices.find(function (d) {
-          return pattern.test(d.label || "");
-        });
-        if (match) return match.id;
-      }
-      /* Mobile: front cam is usually first, back cam is last */
-      if (devices.length >= 2) {
-        return devices[devices.length - 1].id;
-      }
-      return devices[0].id;
+    const BACK_LABELS = [/back/i, /rear/i, /environment/i, /rück/i, /arrière/i, /trás/i, /wide/i];
+    const FRONT_LABELS = [/front/i, /user/i, /selfie/i, /face/i, /facetime/i];
+
+    function isFrontLabel(label) {
+      return FRONT_LABELS.some(function (p) { return p.test(label || ""); });
     }
 
-    async function resolveBackCamera() {
-      try {
-        const devices = await Html5Qrcode.getCameras();
-        if (devices && devices.length) {
-          const backId = pickBackCameraId(devices);
-          if (backId) return backId;
-        }
-      } catch (e) {
-        /* fall through to facingMode */
+    function isBackLabel(label) {
+      return BACK_LABELS.some(function (p) { return p.test(label || ""); });
+    }
+
+    function pickBackCameraId(devices) {
+      if (!devices || !devices.length) return null;
+
+      for (var i = 0; i < devices.length; i++) {
+        if (isBackLabel(devices[i].label)) return devices[i].id;
       }
+
+      var nonFront = devices.filter(function (d) {
+        return d.label && !isFrontLabel(d.label);
+      });
+      if (nonFront.length) return nonFront[nonFront.length - 1].id;
+
+      /* Phones: index 0 is usually front, last is usually rear */
+      if (devices.length >= 2) return devices[devices.length - 1].id;
+
+      return null;
+    }
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+      resizeFrame();
+    }
+
+    function resizeFrame() {
+      var height = Math.max(document.body.scrollHeight, 420);
+      if (window.Streamlit && Streamlit.setFrameHeight) {
+        Streamlit.setFrameHeight(height);
+      }
+    }
+
+    function sendToken(token) {
+      if (window.Streamlit && Streamlit.setComponentValue) {
+        Streamlit.setComponentValue(token);
+      } else {
+        window.parent.postMessage(
+          {
+            isStreamlitMessage: true,
+            type: "streamlit:setComponentValue",
+            value: token,
+          },
+          "*"
+        );
+      }
+      resizeFrame();
+    }
+
+    async function warmUpRearCameraPermission() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Camera not supported in this browser.");
+      }
+      var stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
+      stream.getTracks().forEach(function (track) { track.stop(); });
+    }
+
+    async function resolveRearCamera() {
+      await warmUpRearCameraPermission();
+      var devices = await Html5Qrcode.getCameras();
+      var backId = pickBackCameraId(devices);
+      if (backId) return backId;
       return { facingMode: { ideal: "environment" } };
     }
 
     function onScanSuccess(decodedText) {
-      const token = (decodedText || "").trim();
+      var token = (decodedText || "").trim();
       if (!token || token === sentToken) return;
       sentToken = token;
-      statusEl.textContent = "QR found — loading guest…";
-      sendToStreamlit(token);
+      setStatus("QR found — opening guest…");
+      sendToken(token);
       stopScanner(false);
     }
 
-    async function startScanner() {
-      if (running) return;
-      statusEl.textContent = "Opening back camera…";
-      html5QrCode = null;
-      const boxSize = Math.min(280, Math.max(180, window.innerWidth - 48));
-      const config = {
-        fps: 14,
+    async function tryStart(camera) {
+      if (html5QrCode) {
+        try { await html5QrCode.stop(); } catch (e) {}
+        try { await html5QrCode.clear(); } catch (e) {}
+      }
+      html5QrCode = new Html5Qrcode("reader", { verbose: false });
+      var boxSize = Math.min(300, Math.max(200, window.innerWidth - 40));
+      var config = {
+        fps: 15,
         qrbox: { width: boxSize, height: boxSize },
         aspectRatio: 1.0,
         disableFlip: false,
         experimentalFeatures: { useBarCodeDetectorIfSupported: true },
       };
-      const onSuccess = onScanSuccess;
-      const onFailure = function () {};
+      await html5QrCode.start(camera, config, onScanSuccess, function () {});
+    }
 
-      async function tryStart(camera) {
-        if (html5QrCode) {
-          try {
-            await html5QrCode.stop();
-          } catch (e) {}
-          try {
-            await html5QrCode.clear();
-          } catch (e) {}
-        }
-        html5QrCode = new Html5Qrcode("reader");
-        await html5QrCode.start(camera, config, onSuccess, onFailure);
-      }
+    async function startScanner() {
+      if (running) return;
+      sentToken = null;
+      setStatus("Opening rear camera…");
 
       try {
-        /* 1) Force rear camera via facingMode (best on iPhone / Android) */
-        await tryStart({ facingMode: { exact: "environment" } });
+        var rearCamera = await resolveRearCamera();
+        await tryStart(rearCamera);
       } catch (err1) {
         try {
-          /* 2) Pick rear device by ID from camera list */
-          const camera = await resolveBackCamera();
-          await tryStart(camera);
+          await tryStart({ facingMode: { ideal: "environment" } });
         } catch (err2) {
-          try {
-            /* 3) Soft preference for environment */
-            await tryStart({ facingMode: "environment" });
-          } catch (err3) {
-            statusEl.textContent =
-              "Back camera failed. Allow camera access, then retry — or use photo backup below.";
-            console.error(err3);
-            return;
-          }
+          setStatus("Rear camera blocked. Allow camera access, then retry — or use photo backup.");
+          console.error(err2);
+          return;
         }
       }
 
       running = true;
-      statusEl.textContent = "Back camera on — hold QR in the box";
+      setStatus("Rear camera on — hold QR in the box");
       document.getElementById("btnStart").style.display = "none";
       document.getElementById("btnStop").style.display = "block";
-      setFrameHeight();
+      resizeFrame();
     }
 
     async function stopScanner(showStopped) {
@@ -188,12 +205,10 @@
           await html5QrCode.clear();
         } catch (e) {}
         running = false;
-        if (showStopped) {
-          statusEl.textContent = "Scanner stopped";
-        }
+        if (showStopped) setStatus("Scanner stopped");
         document.getElementById("btnStart").style.display = "block";
         document.getElementById("btnStop").style.display = "none";
-        setFrameHeight();
+        resizeFrame();
       }
     }
 
@@ -202,13 +217,17 @@
       stopScanner(true);
     });
 
-    setFrameHeight();
-    window.addEventListener("resize", setFrameHeight);
+    if (window.Streamlit && Streamlit.setComponentReady) {
+      Streamlit.setComponentReady();
+    } else {
+      window.parent.postMessage(
+        { isStreamlitMessage: true, type: "streamlit:componentReady" },
+        "*"
+      );
+    }
 
-    window.parent.postMessage(
-      { isStreamlitMessage: true, type: "streamlit:componentReady" },
-      "*"
-    );
+    resizeFrame();
+    window.addEventListener("resize", resizeFrame);
   </script>
 </body>
 </html>
