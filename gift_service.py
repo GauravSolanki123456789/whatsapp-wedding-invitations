@@ -220,6 +220,11 @@ def record_gift_handout(
     scanned_by: str = "",
     notes: str = "",
 ) -> tuple[bool, str, dict | None]:
+    """Atomic handout — safe when multiple staff scan the same QR on different phones."""
+    if gifts_to_give < 1:
+        return False, "Enter at least 1 gift.", None
+
+    qr_token: str | None = None
     with db_connection() as connection:
         row = connection.execute(
             "SELECT * FROM gift_guest WHERE id = ?",
@@ -228,22 +233,44 @@ def record_gift_handout(
         if not row:
             return False, "Guest not found.", None
         guest = row_to_dict(row)
+        assert guest is not None
+        qr_token = guest["qr_token"]
         pending = guest["gift_quantity"] - guest["gifts_given"]
         if pending <= 0:
             return False, "All gifts already given for this QR.", guest
-        if gifts_to_give < 1:
-            return False, "Enter at least 1 gift.", guest
         if gifts_to_give > pending:
             return (
                 False,
                 f"Only {pending} gift(s) remaining. Cannot give {gifts_to_give}.",
                 guest,
             )
-        new_given = guest["gifts_given"] + gifts_to_give
-        connection.execute(
-            "UPDATE gift_guest SET gifts_given = ? WHERE id = ?",
-            (new_given, gift_guest_id),
+
+        updated = connection.execute(
+            """
+            UPDATE gift_guest
+            SET gifts_given = gifts_given + ?
+            WHERE id = ?
+              AND gifts_given + ? <= gift_quantity
+            """,
+            (gifts_to_give, gift_guest_id, gifts_to_give),
         )
+        if updated.rowcount == 0:
+            fresh = connection.execute(
+                "SELECT * FROM gift_guest WHERE id = ?",
+                (gift_guest_id,),
+            ).fetchone()
+            fresh_guest = row_to_dict(fresh)
+            remaining = 0
+            if fresh_guest:
+                remaining = max(0, fresh_guest["gift_quantity"] - fresh_guest["gifts_given"])
+            if remaining <= 0:
+                return False, "All gifts already given (another staff member just scanned).", fresh_guest
+            return (
+                False,
+                f"Only {remaining} gift(s) left now — another phone may have scanned first.",
+                fresh_guest,
+            )
+
         connection.execute(
             """
             INSERT INTO gift_scan
@@ -252,8 +279,9 @@ def record_gift_handout(
             """,
             (gift_guest_id, gifts_to_give, _utc_now(), scanned_by.strip(), notes.strip()),
         )
-    updated = get_guest_by_token(guest["qr_token"])
-    return True, f"Recorded {gifts_to_give} gift(s).", updated
+
+    updated_guest = get_guest_by_token(qr_token) if qr_token else None
+    return True, f"Recorded {gifts_to_give} gift(s).", updated_guest
 
 
 def function_report(function_id: int) -> dict[str, Any]:

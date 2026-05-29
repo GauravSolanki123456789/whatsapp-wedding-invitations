@@ -49,9 +49,26 @@ from scan_flow import (
     confirm_handout,
     handle_live_scan_result,
     process_image_bytes,
+    refresh_lookup_guest,
 )
 from scanner_component import render_live_qr_scanner
 from wa_links import wa_me_link
+
+
+def render_database_status() -> None:
+    from database import get_database_status
+
+    status = get_database_status()
+    level_class = {
+        "ok": "stat-pill--ok",
+        "warn": "stat-pill--warn",
+        "info": "",
+    }.get(status["level"], "")
+    st.markdown(
+        f'<span class="stat-pill {level_class}">{status["label"]}</span>',
+        unsafe_allow_html=True,
+    )
+    st.caption(status["detail"])
 
 
 def render_family_selector() -> int:
@@ -392,6 +409,7 @@ def render_scan_tab() -> None:
 
 
 def _render_scan_handout_panel(guest: dict) -> None:
+    guest = refresh_lookup_guest() or guest
     pending = int(guest.get("gifts_pending", 0))
     name = guest.get("guest_name") or guest["mobile_number"]
 

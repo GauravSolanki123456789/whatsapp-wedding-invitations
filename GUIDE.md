@@ -1,5 +1,29 @@
 # Wedding app guide — WhatsApp API, calls, and gifts
 
+## 0. Multi-phone sync (IMPORTANT for staff scanning)
+
+**Without a cloud database, each phone has its own copy of data** — scans on Phone A won’t show on Phone B.
+
+### Set up free Supabase (5 minutes)
+
+1. Go to [supabase.com](https://supabase.com) → New project (free).
+2. Wait for the database to provision.
+3. **Project Settings → Database → Connection string → URI** (choose **Session pooler**).
+4. Copy the URI (replace `[YOUR-PASSWORD]` with your DB password).
+5. Streamlit Cloud → your app → **Settings → Secrets**:
+
+```toml
+DATABASE_URL = "postgresql://postgres.xxxx:YOUR_PASSWORD@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
+```
+
+6. Save → app reboots. Top of app shows **Cloud DB — all phones synced**.
+
+Now families, lists, gift counts, and scans are **shared live** across every staff phone.
+
+See `.streamlit/secrets.toml.example` in the project for a template.
+
+---
+
 ## 1. Sending 800–900 WhatsApp messages this month
 
 ### Option A — Quick Send (already in app, free)

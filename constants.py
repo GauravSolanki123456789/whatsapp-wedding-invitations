@@ -74,6 +74,7 @@ WHATSAPP_WEB_BASE = "https://web.whatsapp.com/send"
 # Persistence paths
 DATA_FOLDER = "data"
 DATABASE_FILE = "data/app.db"
+ENV_DATABASE_URL = "DATABASE_URL"
 GUEST_LIST_FILE = "data/guest_list.json"
 LAST_COMPOSE_FILE = "data/last_compose.json"
 MANUAL_SEND_LOG_FILE = "data/manual_send_log.json"

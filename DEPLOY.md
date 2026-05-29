@@ -8,6 +8,8 @@ Two **100% free** options. Pick one.
 
 **Streamlit Community Cloud** — free forever, works when your laptop is off.
 
+**For wedding day:** add a **Supabase** `DATABASE_URL` in Secrets so all staff phones share the same guest/gift data (see **GUIDE.md §0**).
+
 ### Step 1 — Create a free GitHub account
 
 1. Go to https://github.com/signup

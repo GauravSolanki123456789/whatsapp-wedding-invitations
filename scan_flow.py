@@ -32,6 +32,21 @@ def lookup_guest_from_raw(raw: str) -> tuple[dict | None, str | None]:
     return guest, None
 
 
+def refresh_lookup_guest() -> dict | None:
+    """Reload guest from DB so all staff phones see the latest gift counts."""
+    guest = st.session_state.get(SESSION_SCAN_LOOKUP_GUEST)
+    if not guest:
+        return None
+    token = guest.get("qr_token")
+    if not token:
+        return guest
+    fresh = get_guest_by_token(token)
+    if fresh:
+        st.session_state[SESSION_SCAN_LOOKUP_GUEST] = fresh
+        return fresh
+    return guest
+
+
 def apply_scan_raw(raw: str) -> str | None:
     """Store guest in session from scanned text. Returns error message or None."""
     guest, error = lookup_guest_from_raw(raw)

@@ -89,6 +89,7 @@ from database import ensure_default_family, init_database
 from family_service import get_family
 from named_guest_list_service import get_guest_list_members, members_to_mobile_numbers
 from ui_pages import (
+    render_database_status,
     render_families_tab,
     render_family_selector,
     render_functions_tab,
@@ -1015,6 +1016,7 @@ def main() -> None:
     render_sidebar()
     render_hero()
 
+    render_database_status()
     family_id = render_family_selector()
     family = get_family(family_id)
     family_name = family["name"] if family else "Family"
