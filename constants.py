@@ -35,8 +35,16 @@ SESSION_ACTIVE_FAMILY_ID = "active_family_id"
 SESSION_ACTIVE_GUEST_LIST_ID = "active_guest_list_id"
 SESSION_ACTIVE_FUNCTION_ID = "active_function_id"
 SESSION_LAST_SCAN_TOKEN = "last_scan_token"
+SESSION_SCAN_LOOKUP_GUEST = "scan_lookup_guest"
+SESSION_LAST_PROCESSED_SCAN_PAYLOAD = "last_processed_scan_payload"
+SESSION_SCAN_PHOTO_KEY = "scan_photo_key"
+SESSION_SCAN_UPLOAD_KEY = "scan_upload_key"
+SESSION_SCAN_PASTE_KEY = "scan_paste_key"
 SESSION_USE_NAMED_LIST = "use_named_guest_list"
 SESSION_SCANNER_STAFF_NAME = "scanner_staff_name"
+
+# URL query param set by live QR scanner (auto guest lookup)
+QUERY_PARAM_SCAN_TOKEN = "scan_token"
 
 # Send modes
 SEND_MODE_QUICK = "quick_send"

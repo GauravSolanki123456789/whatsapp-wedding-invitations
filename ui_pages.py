@@ -15,6 +15,10 @@ from constants import (
     SESSION_ACTIVE_FUNCTION_ID,
     SESSION_ACTIVE_GUEST_LIST_ID,
     SESSION_COUNTRY_CODE,
+    SESSION_SCAN_LOOKUP_GUEST,
+    SESSION_SCAN_PASTE_KEY,
+    SESSION_SCAN_PHOTO_KEY,
+    SESSION_SCAN_UPLOAD_KEY,
     SESSION_SCANNER_STAFF_NAME,
     SESSION_USE_NAMED_LIST,
 )
@@ -27,7 +31,6 @@ from gift_service import (
     import_gift_guests_from_excel,
     list_functions,
     list_gift_guests,
-    record_gift_handout,
     regenerate_all_qr_tokens,
 )
 from integrations import integration_status, send_whatsapp_template_message
@@ -38,9 +41,15 @@ from named_guest_list_service import (
     import_excel_to_guest_list,
     list_guest_lists,
 )
-from qr_utils import build_qr_zip_for_function, generate_guest_qr_card, parse_scanned_payload
-from gift_service import get_guest_by_token
-from scanner_component import decode_qr_from_image
+from qr_utils import build_qr_zip_for_function, generate_guest_qr_card
+from scan_flow import (
+    apply_scan_raw,
+    clear_scan_for_next_guest,
+    confirm_handout,
+    consume_query_param_scan,
+    process_image_bytes,
+)
+from scanner_component import render_live_qr_scanner
 from wa_links import wa_me_link
 
 
@@ -302,79 +311,109 @@ def render_functions_tab(family_id: int, family_name: str) -> None:
         st.rerun()
 
 
+def _on_manual_scan_token() -> None:
+    paste_key = f"scan_token_input_{st.session_state.get(SESSION_SCAN_PASTE_KEY, 0)}"
+    raw = st.session_state.get(paste_key, "")
+    if not raw.strip():
+        return
+    if raw.strip() == st.session_state.get("scan_last_paste_attempt"):
+        return
+    st.session_state["scan_last_paste_attempt"] = raw.strip()
+    error = apply_scan_raw(raw)
+    if error:
+        st.session_state["scan_last_error"] = error
+    else:
+        st.session_state.pop("scan_last_error", None)
+
+
 def render_scan_tab() -> None:
-    st.markdown('<p class="section-title">Scan gift QR</p>', unsafe_allow_html=True)
+    consume_query_param_scan()
+
+    st.markdown('<p class="section-title">Staff scan</p>', unsafe_allow_html=True)
+
+    guest = st.session_state.get(SESSION_SCAN_LOOKUP_GUEST)
+
+    if guest:
+        _render_scan_handout_panel(guest)
+        return
+
     st.markdown(
         """
-        <div class="notice-box tip-box">
-          <strong>Staff:</strong> Scan with camera, upload a photo, or paste the code from the guest's QR.
-          Works on iPhone (Safari) and Android.
+        <div class="notice-box tip-box scan-hint">
+          Point the <strong>live scanner</strong> at the guest QR — guest opens automatically.
+          If that fails, use <strong>photo backup</strong> below.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.session_state[SESSION_SCANNER_STAFF_NAME] = st.text_input(
-        "Your name (optional)",
-        value=st.session_state.get(SESSION_SCANNER_STAFF_NAME, ""),
-        placeholder="Staff name for log",
-    )
+    with st.expander("Staff name (optional)", expanded=False):
+        st.session_state[SESSION_SCANNER_STAFF_NAME] = st.text_input(
+            "Logged as",
+            value=st.session_state.get(SESSION_SCANNER_STAFF_NAME, ""),
+            placeholder="Staff name",
+            label_visibility="collapsed",
+            key="scan_staff_input",
+        )
 
-    token_raw = st.text_input(
-        "QR token or scanned text",
-        placeholder="waiv:… or paste full scan result",
-        key="scan_token_input",
-    )
+    scan_error = st.session_state.pop("scan_last_error", None)
+    if scan_error:
+        st.error(scan_error)
 
-    photo = st.camera_input("Take photo of QR", key="scan_camera")
-    if photo is not None:
-        decoded = decode_qr_from_image(photo.getvalue())
-        if decoded:
-            token_raw = decoded
-            st.success("QR read from photo.")
+    render_live_qr_scanner()
 
-    upload = st.file_uploader("Upload QR image", type=["png", "jpg", "jpeg"], key="scan_upload")
-    if upload is not None:
-        decoded = decode_qr_from_image(upload.getvalue())
-        if decoded:
-            token_raw = decoded
-            st.success("QR read from file.")
+    with st.expander("Photo or paste backup", expanded=False):
+        st.caption("Use when live scan or camera permission fails.")
 
-    if st.button("Look up guest", type="primary", use_container_width=True):
-        token = parse_scanned_payload(token_raw)
-        if not token:
-            st.error("Enter or scan a valid QR.")
-            return
-        guest = get_guest_by_token(token)
-        if not guest:
-            st.error("QR not found. Check family/function or regenerate QRs.")
-            return
-        st.session_state["scan_lookup_guest"] = guest
+        paste_key = f"scan_token_input_{st.session_state.get(SESSION_SCAN_PASTE_KEY, 0)}"
+        st.text_input(
+            "Paste QR text",
+            placeholder="waiv:…",
+            key=paste_key,
+            on_change=_on_manual_scan_token,
+        )
 
-    guest = st.session_state.get("scan_lookup_guest")
-    if not guest:
-        return
+        photo_key = f"scan_camera_{st.session_state.get(SESSION_SCAN_PHOTO_KEY, 0)}"
+        photo = st.camera_input("Take photo of QR", key=photo_key)
+        if photo is not None and process_image_bytes(photo.getvalue()):
+            st.rerun()
 
-    pending = guest["gifts_pending"]
+        upload_key = f"scan_upload_{st.session_state.get(SESSION_SCAN_UPLOAD_KEY, 0)}"
+        upload = st.file_uploader(
+            "Upload QR image",
+            type=["png", "jpg", "jpeg"],
+            key=upload_key,
+        )
+        if upload is not None and process_image_bytes(upload.getvalue()):
+            st.rerun()
+
+
+def _render_scan_handout_panel(guest: dict) -> None:
+    pending = int(guest.get("gifts_pending", 0))
+    name = guest.get("guest_name") or guest["mobile_number"]
+
     if pending <= 0:
         st.markdown(
             f"""
             <div class="focus-card focus-card--used">
               <p class="focus-meta">Already completed</p>
-              <p class="focus-guest-number">{guest.get('guest_name') or guest['mobile_number']}</p>
+              <p class="focus-guest-number">{name}</p>
               <p class="focus-meta">{guest['family_name']} · {guest['function_name']}</p>
-              <p class="focus-meta">All {guest['gift_quantity']} gift(s) already given.</p>
+              <p class="focus-meta">All {guest['gift_quantity']} gift(s) given.</p>
             </div>
             """,
             unsafe_allow_html=True,
         )
+        if st.button("Scan next guest", type="primary", use_container_width=True, key="scan_next_done"):
+            clear_scan_for_next_guest()
+            st.rerun()
         return
 
     st.markdown(
         f"""
-        <div class="focus-card focus-card--ok">
-          <p class="focus-meta">Valid — hand out gifts</p>
-          <p class="focus-guest-number">{guest.get('guest_name') or guest['mobile_number']}</p>
+        <div class="focus-card focus-card--ok scan-handout-card">
+          <p class="focus-meta">Hand out gifts</p>
+          <p class="focus-guest-number">{name}</p>
           <p class="focus-meta">{guest['family_name']} · {guest['function_name']}</p>
           <p class="focus-meta"><strong>{pending}</strong> of {guest['gift_quantity']} pending</p>
         </div>
@@ -385,26 +424,26 @@ def render_scan_tab() -> None:
     gifts_now = st.number_input(
         "Gifts giving now",
         min_value=1,
-        max_value=int(pending),
+        max_value=pending,
         value=1,
         step=1,
+        key="scan_gifts_now",
     )
-    notes = st.text_input("Notes (optional)", key="scan_notes")
+    notes = st.text_input("Notes (optional)", key="scan_notes_handout")
 
-    if st.button("Confirm handout", type="primary", use_container_width=True):
-        ok, msg, updated = record_gift_handout(
-            guest["id"],
-            int(gifts_now),
-            scanned_by=st.session_state.get(SESSION_SCANNER_STAFF_NAME, ""),
-            notes=notes,
-        )
-        if ok:
-            st.success(msg)
-            if updated:
-                st.session_state["scan_lookup_guest"] = updated
+    col_confirm, col_cancel = st.columns(2)
+    with col_confirm:
+        if st.button("Confirm & next guest", type="primary", use_container_width=True):
+            ok, msg = confirm_handout(guest["id"], int(gifts_now), notes)
+            if ok:
+                st.toast(msg, icon="✅")
+                st.rerun()
+            else:
+                st.error(msg)
+    with col_cancel:
+        if st.button("Cancel", use_container_width=True, key="scan_cancel_handout"):
+            clear_scan_for_next_guest()
             st.rerun()
-        else:
-            st.error(msg)
 
 
 def render_reports_tab(family_id: int) -> None:

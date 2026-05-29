@@ -120,6 +120,14 @@ def inject_app_styles() -> None:
 
           .focus-meta { color: var(--ink-soft); font-size: 0.85rem; margin: 0; }
 
+          .scan-hint { font-size: 0.82rem; }
+          .scan-handout-card { margin-top: 0.25rem; }
+
+          iframe[title="streamlit_components_v1.html"] {
+            border-radius: 14px;
+            border: 1px solid var(--border);
+          }
+
           .step-list {
             text-align: left;
             margin: 0.5rem 0 0;
