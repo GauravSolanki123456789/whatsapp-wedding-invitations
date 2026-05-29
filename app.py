@@ -17,6 +17,7 @@ import streamlit as st
 from compose_store import clear_last_compose_attachment, load_last_compose, save_last_compose
 from constants import (
     APP_ICON,
+    APP_TAGLINE,
     APP_TITLE,
     ALLOWED_ATTACHMENT_TYPES,
     ATTACHMENT_FOLDER,
@@ -46,9 +47,12 @@ from constants import (
     SESSION_DELAY_MAX,
     SESSION_DELAY_MIN,
     SESSION_FILE_UPLOAD_KEY,
+    SESSION_ACTIVE_FAMILY_ID,
+    SESSION_ACTIVE_GUEST_LIST_ID,
     SESSION_GUEST_LIST,
     SESSION_GUEST_LIST_LOADED,
     SESSION_MANUAL_SENT,
+    SESSION_USE_NAMED_LIST,
     SESSION_MESSAGE,
     SESSION_SEND_LOG,
     SESSION_SEND_MODE,
@@ -81,205 +85,19 @@ from whatsapp_service import (
     start_send_session,
     stop_send_session,
 )
-
-
-def inject_custom_styles() -> None:
-    st.markdown(
-        """
-        <style>
-          @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:wght@600&display=swap');
-
-          :root {
-            --brand: #b76e79;
-            --brand-dark: #9e5560;
-            --ink: #2c2416;
-            --ink-soft: #6b5b52;
-            --surface: #ffffff;
-            --muted: #faf6f3;
-            --border: rgba(183, 110, 121, 0.2);
-            --radius: 16px;
-          }
-
-          html, body, [class*="css"] { -webkit-font-smoothing: antialiased; }
-
-          .block-container {
-            padding-top: 0.75rem;
-            padding-bottom: 3rem;
-            max-width: 720px;
-          }
-
-          h1, h2, h3, .hero-title, .section-title {
-            font-family: 'Fraunces', Georgia, serif !important;
-          }
-
-          p, label, .stMarkdown, .stCaption, input, textarea, button {
-            font-family: 'DM Sans', sans-serif !important;
-          }
-
-          #MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; }
-
-          .hero-card {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 1.1rem 1rem;
-            margin-bottom: 0.75rem;
-          }
-
-          .hero-title {
-            font-size: clamp(1.35rem, 4vw, 1.75rem);
-            color: #5c3d42;
-            margin: 0 0 0.25rem 0;
-            line-height: 1.15;
-          }
-
-          .hero-subtitle {
-            color: var(--ink-soft);
-            font-size: 0.92rem;
-            margin: 0;
-            line-height: 1.45;
-          }
-
-          .section-title {
-            font-size: 1.05rem;
-            color: #5c3d42;
-            margin: 0 0 0.65rem 0;
-            font-weight: 600;
-          }
-
-          .stat-pill {
-            display: inline-block;
-            background: var(--muted);
-            color: #5c3d42;
-            border-radius: 999px;
-            padding: 0.35rem 0.75rem;
-            font-size: 0.82rem;
-            font-weight: 600;
-            margin-right: 0.35rem;
-          }
-
-          .stat-pill--warn { background: #fde8e8; color: #8b2e2e; }
-
-          .notice-box {
-            border-radius: 12px;
-            padding: 0.75rem 0.85rem;
-            margin: 0.5rem 0;
-            font-size: 0.88rem;
-            line-height: 1.45;
-          }
-
-          .tip-box { background: #f0faf3; border-left: 3px solid #3d9970; color: #2d4a38; }
-          .warning-box { background: #fff8e8; border-left: 3px solid #d4a017; color: #5c4a1a; }
-
-          .focus-card {
-            background: linear-gradient(160deg, #fff9f5 0%, #f8ece6 100%);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 1.25rem 1rem;
-            text-align: center;
-            margin: 0.75rem 0;
-          }
-
-          .focus-card--wait {
-            background: #fff8e8;
-            border-color: #e8d48a;
-          }
-
-          .focus-guest-number {
-            font-size: clamp(1.25rem, 5vw, 1.6rem);
-            font-weight: 700;
-            color: #5c3d42;
-            letter-spacing: 0.02em;
-            margin: 0.35rem 0 0.15rem;
-            word-break: break-all;
-          }
-
-          .focus-meta {
-            color: var(--ink-soft);
-            font-size: 0.88rem;
-            margin: 0;
-          }
-
-          .step-list {
-            text-align: left;
-            margin: 0.65rem 0 0;
-            padding-left: 1.1rem;
-            color: var(--ink-soft);
-            font-size: 0.86rem;
-            line-height: 1.55;
-          }
-
-          div[data-testid="stSidebar"] {
-            background: var(--muted);
-            border-right: 1px solid var(--border);
-          }
-
-          div[data-testid="stTabs"] button {
-            font-weight: 600 !important;
-            font-size: 0.9rem !important;
-          }
-
-          div[data-testid="stVerticalBlockBorderWrapper"] {
-            border-radius: var(--radius) !important;
-            border-color: var(--border) !important;
-            padding: 0.5rem 0.65rem !important;
-            margin-bottom: 0.5rem;
-          }
-
-          .stButton > button {
-            border-radius: 12px !important;
-            min-height: 2.85rem;
-            font-weight: 600;
-          }
-
-          .stButton > button[kind="primary"] {
-            background: linear-gradient(135deg, var(--brand), var(--brand-dark)) !important;
-            border: none !important;
-            color: #fff !important;
-          }
-
-          a[data-testid="stLinkButton"] {
-            border-radius: 12px !important;
-            min-height: 3rem !important;
-            font-weight: 700 !important;
-            font-size: 1rem !important;
-          }
-
-          div[data-testid="stProgress"] > div {
-            background: linear-gradient(90deg, var(--brand), var(--brand-dark));
-            border-radius: 999px;
-          }
-
-          @media (max-width: 768px) {
-            .block-container {
-              padding-left: 0.65rem;
-              padding-right: 0.65rem;
-              padding-bottom: 4rem;
-              max-width: 100%;
-            }
-
-            div[data-testid="column"] {
-              width: 100% !important;
-              flex: 1 1 100% !important;
-              min-width: 100% !important;
-            }
-
-            div[data-testid="stTabs"] [data-baseweb="tab-list"] {
-              gap: 0.25rem;
-              flex-wrap: wrap;
-            }
-
-            div[data-testid="stTabs"] button {
-              padding: 0.45rem 0.65rem !important;
-              min-width: auto !important;
-            }
-
-            .focus-card { padding: 1rem 0.85rem; }
-          }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+from database import ensure_default_family, init_database
+from family_service import get_family
+from named_guest_list_service import get_guest_list_members, members_to_mobile_numbers
+from ui_pages import (
+    render_families_tab,
+    render_family_selector,
+    render_functions_tab,
+    render_integrations_tab,
+    render_lists_tab,
+    render_reports_tab,
+    render_scan_tab,
+)
+from ui_styles import inject_app_styles
 
 
 def inject_pwa_meta() -> None:
@@ -314,7 +132,12 @@ def init_session_state() -> None:
         SESSION_GROUP_LOG: [],
         SESSION_GUIDED_COOLDOWN_UNTIL: 0,
         SESSION_ATTACHMENT_BYTES: None,
+        SESSION_ACTIVE_FAMILY_ID: None,
+        SESSION_ACTIVE_GUEST_LIST_ID: None,
+        SESSION_USE_NAMED_LIST: False,
     }
+    init_database()
+    ensure_default_family()
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -326,6 +149,9 @@ def init_session_state() -> None:
         if last_compose["attachment_path"]:
             st.session_state[SESSION_ATTACHMENT_PATH] = last_compose["attachment_path"]
             st.session_state[SESSION_ATTACHMENT_NAME] = last_compose["attachment_name"]
+            if os.path.exists(last_compose["attachment_path"]):
+                with open(last_compose["attachment_path"], "rb") as file_handle:
+                    st.session_state[SESSION_ATTACHMENT_BYTES] = file_handle.read()
         st.session_state[SESSION_COMPOSE_LOADED] = True
 
     if not st.session_state[SESSION_GUEST_LIST_LOADED]:
@@ -340,9 +166,9 @@ def init_session_state() -> None:
 def render_hero() -> None:
     st.markdown(
         f"""
-        <div class="hero-card">
+        <div class="app-shell">
           <p class="hero-title">{APP_ICON} {APP_TITLE}</p>
-          <p class="hero-subtitle">Upload guests · compose · send on phone or laptop.</p>
+          <p class="hero-subtitle">{APP_TAGLINE}</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -665,7 +491,8 @@ def get_attachment_download_data() -> tuple[bytes | None, str | None]:
     attachment_path = st.session_state.get(SESSION_ATTACHMENT_PATH)
     if attachment_path and os.path.exists(attachment_path):
         with open(attachment_path, "rb") as file_handle:
-            return file_handle.read(), name
+            st.session_state[SESSION_ATTACHMENT_BYTES] = file_handle.read()
+            return st.session_state[SESSION_ATTACHMENT_BYTES], name
     return None, name
 
 
@@ -697,7 +524,7 @@ def validate_before_send(mobile_numbers: list[str], message: str, attachment_pat
         attachment_path and os.path.exists(attachment_path)
     )
     if not message and not has_attachment:
-        st.error("Write a message or attach a file in the **Compose** tab first.")
+        st.warning("Add invitation text and/or an attachment in the **Compose** tab first.")
         return False
     if attachment_path and not os.path.exists(attachment_path) and not st.session_state.get(
         SESSION_ATTACHMENT_BYTES
@@ -713,15 +540,17 @@ def validate_before_send(mobile_numbers: list[str], message: str, attachment_pat
 
 
 def save_attachment(uploaded_file) -> str:
-    """Persist an uploaded attachment to disk and return its path."""
+    """Persist attachment to disk (survives cloud reruns) and keep bytes in session."""
     os.makedirs(ATTACHMENT_FOLDER, exist_ok=True)
+    os.makedirs("data/attachments", exist_ok=True)
     safe_name = Path(uploaded_file.name).name
-    attachment_path = os.path.join(ATTACHMENT_FOLDER, safe_name)
+    file_bytes = bytes(uploaded_file.getbuffer())
+    attachment_path = os.path.join("data/attachments", f"current_{safe_name}")
 
     with open(attachment_path, "wb") as file_handle:
-        file_handle.write(uploaded_file.getbuffer())
+        file_handle.write(file_bytes)
 
-    st.session_state[SESSION_ATTACHMENT_BYTES] = bytes(uploaded_file.getbuffer())
+    st.session_state[SESSION_ATTACHMENT_BYTES] = file_bytes
     return attachment_path
 
 
@@ -748,6 +577,16 @@ def render_attachment_preview(attachment_path: str, attachment_name: str) -> Non
 
 def render_message_section() -> None:
     st.markdown('<p class="section-title">Invitation</p>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="notice-box tip-box">
+          <strong>Video on phone:</strong> Attach here → in <strong>Send</strong> tap
+          <strong>Save attachment</strong> → in WhatsApp use 📎 and pick that file.
+          Links cannot auto-attach video (WhatsApp limitation).
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     message = st.text_area(
         "Message",
@@ -790,6 +629,11 @@ def render_message_section() -> None:
 
 def render_send_section() -> None:
     st.markdown('<p class="section-title">Send</p>', unsafe_allow_html=True)
+
+    if st.session_state.get(SESSION_USE_NAMED_LIST):
+        st.caption("Numbers come from your **Lists** tab (saved list).")
+    else:
+        st.caption("Numbers come from **Guests** tab. Enable saved list in **Lists**.")
 
     message = st.session_state[SESSION_MESSAGE].strip()
     attachment_name = st.session_state.get(SESSION_ATTACHMENT_NAME)
@@ -1014,6 +858,14 @@ def render_auto_send_panel(
 
 
 def collect_mobile_numbers() -> list[str]:
+    if st.session_state.get(SESSION_USE_NAMED_LIST) and st.session_state.get(
+        SESSION_ACTIVE_GUEST_LIST_ID
+    ):
+        members = get_guest_list_members(st.session_state[SESSION_ACTIVE_GUEST_LIST_ID])
+        numbers = members_to_mobile_numbers(members, st.session_state[SESSION_COUNTRY_CODE])
+        if numbers:
+            return numbers
+
     guest_list = st.session_state[SESSION_GUEST_LIST]
     country_code = st.session_state[SESSION_COUNTRY_CODE]
     normalized_rows = []
@@ -1157,19 +1009,44 @@ def main() -> None:
         initial_sidebar_state="collapsed",
     )
 
-    inject_custom_styles()
+    inject_app_styles()
     inject_pwa_meta()
     init_session_state()
     render_sidebar()
     render_hero()
 
-    tab_guests, tab_compose, tab_send, tab_group = st.tabs(["Guests", "Compose", "Send", "Group"])
+    family_id = render_family_selector()
+    family = get_family(family_id)
+    family_name = family["name"] if family else "Family"
+
+    if st.session_state.get(SESSION_USE_NAMED_LIST):
+        st.markdown(
+            '<span class="stat-pill stat-pill--ok">Using saved list for Send</span>',
+            unsafe_allow_html=True,
+        )
+
+    (
+        tab_guests,
+        tab_lists,
+        tab_compose,
+        tab_send,
+        tab_gifts,
+        tab_scan,
+        tab_reports,
+        tab_settings,
+    ) = st.tabs(
+        ["Guests", "Lists", "Compose", "Send", "Gifts", "Scan", "Reports", "Settings"]
+    )
 
     with tab_guests:
         with st.container(border=True):
             render_upload_section()
             st.divider()
             render_guest_editor()
+
+    with tab_lists:
+        with st.container(border=True):
+            render_lists_tab(family_id)
 
     with tab_compose:
         with st.container(border=True):
@@ -1180,10 +1057,26 @@ def main() -> None:
             render_send_section()
         render_send_log()
 
-    with tab_group:
+    with tab_gifts:
         with st.container(border=True):
+            render_functions_tab(family_id, family_name)
+
+    with tab_scan:
+        with st.container(border=True):
+            render_scan_tab()
+
+    with tab_reports:
+        with st.container(border=True):
+            render_reports_tab(family_id)
+
+    with tab_settings:
+        with st.container(border=True):
+            render_families_tab(family_id)
+            st.divider()
             render_group_section()
-        render_group_log()
+            render_group_log()
+            st.divider()
+            render_integrations_tab()
 
 
 if __name__ == "__main__":

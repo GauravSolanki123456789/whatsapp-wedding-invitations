@@ -60,9 +60,16 @@ Wait 2–3 minutes. You get a link like:
 | Feature | Works? |
 |---------|--------|
 | Upload Excel guest list | Yes |
-| Compose message + attach video | Yes |
-| **Quick Send** (wa.me links) | Yes — on phone & laptop |
+| **Named lists** (Ranka, Solanki, …) | Yes — SQLite in `data/` |
+| **Families** (multi-wedding) | Yes |
+| **Gift QR** generate + ZIP download | Yes |
+| **Scan** tab (camera / upload / paste) | Yes — allow camera on phone |
+| Compose message + attach video | Yes — use **Save attachment** in WhatsApp |
+| **Guided / Quick Send** (wa.me links) | Yes — on phone & laptop |
 | Auto Send (Chrome automation) | No — laptop local only |
+| WhatsApp Cloud API / Twilio calls | Only if you add [Secrets](https://docs.streamlit.io/streamlit-community-cloud/deploy-your-app/deploy-an-app/connect-to-data-sources/secrets-management) |
+
+See **GUIDE.md** for WhatsApp Business API setup and gift workflow.
 
 ---
 

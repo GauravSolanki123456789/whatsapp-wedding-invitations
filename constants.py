@@ -2,9 +2,15 @@
 
 APP_TITLE = "WhatsApp Wedding Invitations"
 APP_ICON = "💒"
+APP_TAGLINE = "Families · lists · invites · gift QR · scan"
 
-# Data column name — used in Excel parsing, DataFrames, and the data editor
+# Data column names — consistent across Excel, DB, UI, and reports
 MOBILE_NUMBER_COLUMN = "mobile_number"
+GUEST_NAME_COLUMN = "guest_name"
+GIFT_QUANTITY_COLUMN = "gift_quantity"
+
+# QR payload prefix (encoded in guest QR images)
+QR_TOKEN_PREFIX = "waiv:"
 
 # Session state keys
 SESSION_GUEST_LIST = "guest_list"
@@ -25,6 +31,12 @@ SESSION_GROUP_MODE = "group_mode"
 SESSION_GROUP_LOG = "group_log"
 SESSION_GUIDED_COOLDOWN_UNTIL = "guided_cooldown_until"
 SESSION_ATTACHMENT_BYTES = "attachment_bytes"
+SESSION_ACTIVE_FAMILY_ID = "active_family_id"
+SESSION_ACTIVE_GUEST_LIST_ID = "active_guest_list_id"
+SESSION_ACTIVE_FUNCTION_ID = "active_function_id"
+SESSION_LAST_SCAN_TOKEN = "last_scan_token"
+SESSION_USE_NAMED_LIST = "use_named_guest_list"
+SESSION_SCANNER_STAFF_NAME = "scanner_staff_name"
 
 # Send modes
 SEND_MODE_QUICK = "quick_send"
@@ -51,6 +63,7 @@ WHATSAPP_WEB_BASE = "https://web.whatsapp.com/send"
 
 # Persistence paths
 DATA_FOLDER = "data"
+DATABASE_FILE = "data/app.db"
 GUEST_LIST_FILE = "data/guest_list.json"
 LAST_COMPOSE_FILE = "data/last_compose.json"
 MANUAL_SEND_LOG_FILE = "data/manual_send_log.json"
