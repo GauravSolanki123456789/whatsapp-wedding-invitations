@@ -111,6 +111,7 @@ from ui_pages import (
     render_reports_tab,
     render_scan_tab,
 )
+from ui_whatsapp_sender import render_whatsapp_sender_settings
 from ui_styles import inject_app_styles
 
 
@@ -697,16 +698,13 @@ def render_send_section(family_id: int, family: dict | None) -> None:
     else:
         st.caption("Numbers come from **Guests** tab. Enable saved list in **Lists**.")
 
-    wa_app = (family or {}).get("whatsapp_app_type") or "personal"
-    wa_sender = (family or {}).get("whatsapp_sender_phone") or ""
-    if wa_sender:
-        app_label = "WhatsApp Business" if wa_app == WHATSAPP_APP_BUSINESS else "WhatsApp"
-        st.info(f"Use **{app_label}** logged in as **{wa_sender}** for this family.")
-    if wa_app == WHATSAPP_APP_BUSINESS:
-        st.caption(
-            "Android opens WhatsApp Business via the Send button. "
-            "On iPhone, open WhatsApp Business once before tapping Send."
-        )
+    family_name = (family or {}).get("name", "Family")
+    wa_sender, wa_app = render_whatsapp_sender_settings(
+        family_id,
+        family_name,
+        country_code=st.session_state[SESSION_COUNTRY_CODE],
+        compact=True,
+    )
 
     message = get_family_message(family_id).strip() or st.session_state[SESSION_MESSAGE].strip()
     attachment_name = st.session_state.get(SESSION_ATTACHMENT_NAME)
@@ -735,6 +733,7 @@ def render_send_section(family_id: int, family: dict | None) -> None:
         render_guided_send_panel(
             family_id=family_id,
             wa_app_type=wa_app,
+            wa_sender_phone=wa_sender,
             mobile_numbers=mobile_numbers,
             message=message,
             attachment_name=attachment_name,
@@ -746,6 +745,7 @@ def render_send_section(family_id: int, family: dict | None) -> None:
         render_quick_send_panel(
             family_id=family_id,
             wa_app_type=wa_app,
+            wa_sender_phone=wa_sender,
             mobile_numbers=mobile_numbers,
             message=message,
             attachment_name=attachment_name,
@@ -767,6 +767,7 @@ def render_send_section(family_id: int, family: dict | None) -> None:
 def render_guided_send_panel(
     family_id: int,
     wa_app_type: str,
+    wa_sender_phone: str,
     mobile_numbers: list[str],
     message: str,
     attachment_name: str | None,
@@ -835,10 +836,16 @@ def render_guided_send_panel(
 
     st.link_button(
         "Open WhatsApp",
-        whatsapp_guest_link(number, message, wa_app_type),
+        whatsapp_guest_link(number, message, wa_app_type, wa_sender_phone),
         use_container_width=True,
     )
-    if wa_app_type == WHATSAPP_APP_BUSINESS:
+    if wa_sender_phone.strip():
+        st.link_button(
+            "Open via wa.me (fallback)",
+            wa_me_link(number, message),
+            use_container_width=True,
+        )
+    elif wa_app_type == WHATSAPP_APP_BUSINESS:
         st.link_button(
             "Open via wa.me (fallback)",
             wa_me_link(number, message),
@@ -861,6 +868,7 @@ def render_guided_send_panel(
 def render_quick_send_panel(
     family_id: int,
     wa_app_type: str,
+    wa_sender_phone: str,
     mobile_numbers: list[str],
     message: str,
     attachment_name: str | None,
@@ -891,7 +899,7 @@ def render_quick_send_panel(
             with col_b:
                 st.link_button(
                     "Open",
-                    whatsapp_guest_link(mobile_number, message, wa_app_type),
+                    whatsapp_guest_link(mobile_number, message, wa_app_type, wa_sender_phone),
                     use_container_width=True,
                 )
             if not is_sent and st.button("Mark sent", key=f"mark_sent_{mobile_number}", use_container_width=True):

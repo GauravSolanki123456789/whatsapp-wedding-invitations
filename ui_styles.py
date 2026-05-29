@@ -97,6 +97,28 @@ def inject_app_styles() -> None:
           .warning-box { background: #fff8e8; border-left: 3px solid #d4a017; color: #5c4a1a; }
           .info-box { background: #f5f0fa; border-left: 3px solid var(--brand); color: #4a3848; }
 
+          .sender-card-wrap {
+            background: linear-gradient(165deg, #f4faf6 0%, #e8f2ec 100%);
+            border: 1px solid rgba(45, 106, 79, 0.18);
+            border-radius: var(--radius);
+            padding: 0.7rem 0.8rem;
+            margin: 0.35rem 0 0.65rem 0;
+          }
+
+          .sender-card-title {
+            font-weight: 700;
+            color: #2d4a38;
+            font-size: 0.92rem;
+            margin: 0 0 0.25rem 0;
+          }
+
+          .sender-card-hint {
+            color: var(--ink-soft);
+            font-size: 0.78rem;
+            line-height: 1.4;
+            margin: 0;
+          }
+
           .focus-card {
             background: linear-gradient(160deg, #fff9f5 0%, #f8ece6 100%);
             border: 1px solid var(--border);
@@ -159,7 +181,9 @@ def inject_app_styles() -> None:
             padding: 0.35rem 0.55rem !important;
             margin: 0.1rem !important;
             font-weight: 600 !important;
-            font-size: 0.82rem !important;
+            font-size: 0.78rem !important;
+            min-height: 2.5rem;
+            align-items: center;
           }
 
           div[data-testid="stRadio"] label[data-checked="true"],
@@ -210,6 +234,19 @@ def inject_app_styles() -> None:
               width: 100% !important;
               flex: 1 1 100% !important;
               min-width: 100% !important;
+            }
+
+            div[data-testid="stRadio"] > div {
+              width: 100%;
+            }
+
+            div[data-testid="stRadio"] label {
+              flex: 1 1 45%;
+              justify-content: center;
+            }
+
+            .sender-card-wrap {
+              padding: 0.65rem 0.7rem;
             }
 
             div[data-testid="stTabs"] [data-baseweb="tab-list"] {

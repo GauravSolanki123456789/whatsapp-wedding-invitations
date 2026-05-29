@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import streamlit as st
 
-from database import _utc_now, db_connection, invalidate_families_cache, row_to_dict
+from database import _utc_now, apply_schema_migrations, db_connection, invalidate_families_cache, row_to_dict
+from constants import WHATSAPP_APP_TYPE_COLUMN, WHATSAPP_SENDER_PHONE_COLUMN
 
 
 def _fetch_families() -> list[dict]:
     with db_connection() as connection:
+        apply_schema_migrations(connection)
         rows = connection.execute(
-            """
-            SELECT id, name, created_at, whatsapp_sender_phone, whatsapp_app_type
+            f"""
+            SELECT id, name, created_at,
+                   {WHATSAPP_SENDER_PHONE_COLUMN}, {WHATSAPP_APP_TYPE_COLUMN}
             FROM family ORDER BY name
             """
         ).fetchall()
@@ -61,8 +64,9 @@ def get_family(family_id: int) -> dict | None:
             return family
     with db_connection() as connection:
         row = connection.execute(
-            """
-            SELECT id, name, created_at, whatsapp_sender_phone, whatsapp_app_type
+            f"""
+            SELECT id, name, created_at,
+                   {WHATSAPP_SENDER_PHONE_COLUMN}, {WHATSAPP_APP_TYPE_COLUMN}
             FROM family WHERE id = ?
             """,
             (family_id,),
@@ -78,9 +82,9 @@ def update_family_whatsapp_settings(
     try:
         with db_connection() as connection:
             connection.execute(
-                """
+                f"""
                 UPDATE family
-                SET whatsapp_sender_phone = ?, whatsapp_app_type = ?
+                SET {WHATSAPP_SENDER_PHONE_COLUMN} = ?, {WHATSAPP_APP_TYPE_COLUMN} = ?
                 WHERE id = ?
                 """,
                 (sender_phone.strip(), app_type.strip(), family_id),

@@ -33,7 +33,17 @@ def api_whatsapp_link(mobile_number: str, message: str = "") -> str:
     return f"https://api.whatsapp.com/send?phone={phone}"
 
 
-def wa_business_link(mobile_number: str, message: str = "") -> str:
+def wa_personal_android_link(mobile_number: str, message: str = "") -> str:
+    """Android intent — opens WhatsApp (personal) instead of Business."""
+    phone = phone_for_wa_link(mobile_number)
+    text = quote(message) if message.strip() else ""
+    intent = f"intent://send?phone={phone}"
+    if text:
+        intent += f"&text={text}"
+    return intent + "#Intent;scheme=whatsapp;package=com.whatsapp;end"
+
+
+def wa_business_android_link(mobile_number: str, message: str = "") -> str:
     """Android intent — opens WhatsApp Business when installed."""
     phone = phone_for_wa_link(mobile_number)
     text = quote(message) if message.strip() else ""
@@ -44,10 +54,19 @@ def wa_business_link(mobile_number: str, message: str = "") -> str:
 
 
 def whatsapp_guest_link(
-    mobile_number: str,
+    guest_mobile_number: str,
     message: str = "",
     app_type: str = WHATSAPP_APP_PERSONAL,
+    sender_phone: str = "",
 ) -> str:
+    """
+    Link to message a guest on WhatsApp.
+
+    If sender_phone is empty, use wa.me (phone default — usually Business if that was last used).
+    If sender_phone is set, open the chosen app (Personal vs Business) via Android intent.
+    """
+    if not (sender_phone or "").strip():
+        return wa_me_link(guest_mobile_number, message)
     if app_type == WHATSAPP_APP_BUSINESS:
-        return wa_business_link(mobile_number, message)
-    return wa_me_link(mobile_number, message)
+        return wa_business_android_link(guest_mobile_number, message)
+    return wa_personal_android_link(guest_mobile_number, message)

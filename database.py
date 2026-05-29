@@ -16,7 +16,7 @@ from constants import DATABASE_FILE
 ENV_DATABASE_URL = "DATABASE_URL"
 ENV_SUPABASE_REGION = "SUPABASE_REGION"
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -392,6 +392,27 @@ def _migrate_family_columns(connection: DbConnection) -> None:
                 pass
 
 
+def apply_schema_migrations(connection: DbConnection) -> None:
+    """Apply incremental migrations — safe to call on every cold start."""
+    row = connection.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+    if row is None:
+        connection.execute("INSERT INTO schema_version (version) VALUES (?)", (0,))
+        current = 0
+    else:
+        current = int(row["version"])
+
+    if current >= _SCHEMA_VERSION:
+        return
+
+    if current < 2:
+        _migrate_family_columns(connection)
+
+    connection.execute(
+        "UPDATE schema_version SET version = ?",
+        (_SCHEMA_VERSION,),
+    )
+
+
 def _run_schema_init(connection: DbConnection) -> None:
     if is_cloud_database():
         for statement in _POSTGRES_STATEMENTS:
@@ -399,27 +420,27 @@ def _run_schema_init(connection: DbConnection) -> None:
     else:
         connection._conn.executescript(_SQLITE_SCHEMA)  # noqa: SLF001
 
-    _migrate_family_columns(connection)
-
     row = connection.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
     if row is None:
         connection.execute(
             "INSERT INTO schema_version (version) VALUES (?)",
-            (_SCHEMA_VERSION,),
+            (0,),
         )
+
+    apply_schema_migrations(connection)
 
 
 def init_database() -> None:
-    """Create tables if needed — cached once per app worker (not every tab click)."""
+    """Create tables if needed — cached per schema version (re-runs migrations on deploy)."""
     import streamlit as st
 
     @st.cache_resource
-    def _schema_ready() -> bool:
+    def _schema_ready(schema_version: int) -> bool:
         with db_connection() as connection:
             _run_schema_init(connection)
         return True
 
-    _schema_ready()
+    _schema_ready(_SCHEMA_VERSION)
 
 
 def ensure_default_family() -> int:
@@ -448,10 +469,13 @@ def bootstrap_database() -> str | None:
 
 
 def ensure_database_ready(session_state: dict) -> str | None:
-    """Run DB setup once per browser session — not on every tab switch."""
+    """Run DB setup once per browser session — re-runs if schema version changes."""
     from constants import SESSION_DB_BOOTSTRAPPED
 
-    if session_state.get(SESSION_DB_BOOTSTRAPPED):
+    if (
+        session_state.get(SESSION_DB_BOOTSTRAPPED)
+        and session_state.get("db_schema_version") == _SCHEMA_VERSION
+    ):
         return session_state.get("database_error")
 
     if not is_cloud_database():
@@ -459,6 +483,7 @@ def ensure_database_ready(session_state: dict) -> str | None:
             init_database()
             ensure_default_family()
             session_state[SESSION_DB_BOOTSTRAPPED] = True
+            session_state["db_schema_version"] = _SCHEMA_VERSION
             return None
         except Exception as exc:
             err = explain_database_error(exc)
@@ -468,9 +493,10 @@ def ensure_database_ready(session_state: dict) -> str | None:
     err = bootstrap_database()
     if err:
         session_state["database_error"] = err
-    else:
-        session_state[SESSION_DB_BOOTSTRAPPED] = True
-    return err
+        return err
+    session_state[SESSION_DB_BOOTSTRAPPED] = True
+    session_state["db_schema_version"] = _SCHEMA_VERSION
+    return None
 
 
 def explain_database_error(exc: BaseException) -> str:

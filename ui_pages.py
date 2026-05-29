@@ -19,8 +19,6 @@ from constants import (
     SESSION_SCAN_PHOTO_KEY,
     SESSION_SCAN_UPLOAD_KEY,
     SESSION_SCANNER_STAFF_NAME,
-    WHATSAPP_APP_BUSINESS,
-    WHATSAPP_APP_PERSONAL,
 )
 from excel_templates import gift_guest_template_bytes, guest_list_template_bytes
 from family_service import (
@@ -28,7 +26,6 @@ from family_service import (
     delete_family,
     get_family,
     list_families,
-    update_family_whatsapp_settings,
 )
 from family_state import (
     get_active_function_id,
@@ -69,6 +66,7 @@ from scan_flow import (
     refresh_lookup_guest,
 )
 from scanner_component import render_live_qr_scanner
+from ui_whatsapp_sender import render_whatsapp_sender_settings
 from wa_links import wa_me_link
 
 
@@ -147,35 +145,12 @@ def render_families_tab(family_id: int) -> None:
             st.caption(f"• {family_row['name']}")
 
     st.markdown("---")
-    st.markdown(f"**WhatsApp sender for {family_name}**")
-    st.caption(
-        "Set which WhatsApp app opens when you tap Send. "
-        "On iPhone, the phone uses whichever WhatsApp you opened last — log into the right account first."
+    render_whatsapp_sender_settings(
+        family_id,
+        family_name,
+        country_code=st.session_state[SESSION_COUNTRY_CODE],
+        compact=False,
     )
-    wa_phone = st.text_input(
-        "Your sender number (reminder label)",
-        value=family.get("whatsapp_sender_phone") or "",
-        placeholder="+919876543210",
-        help="Not sent to WhatsApp — just reminds staff which SIM/app to use for this family.",
-    )
-    wa_app = st.radio(
-        "Open this app when sending",
-        options=[WHATSAPP_APP_PERSONAL, WHATSAPP_APP_BUSINESS],
-        format_func=lambda value: (
-            "WhatsApp (personal)"
-            if value == WHATSAPP_APP_PERSONAL
-            else "WhatsApp Business (Android intent)"
-        ),
-        index=0 if (family.get("whatsapp_app_type") or WHATSAPP_APP_PERSONAL) == WHATSAPP_APP_PERSONAL else 1,
-        horizontal=True,
-    )
-    if st.button("Save WhatsApp settings", use_container_width=True):
-        err = update_family_whatsapp_settings(family_id, wa_phone, wa_app)
-        if err:
-            st.error(err)
-        else:
-            set_flash(f"WhatsApp settings saved for **{family_name}**.")
-            st.rerun()
 
     if len(families) > 1:
         if st.button("Delete current family", use_container_width=True):
