@@ -85,7 +85,7 @@ from whatsapp_service import (
     start_send_session,
     stop_send_session,
 )
-from database import ensure_default_family, init_database
+from database import bootstrap_database, ensure_default_family, init_database, is_cloud_database
 from family_service import get_family
 from named_guest_list_service import get_guest_list_members, members_to_mobile_numbers
 from ui_pages import (
@@ -137,8 +137,14 @@ def init_session_state() -> None:
         SESSION_ACTIVE_GUEST_LIST_ID: None,
         SESSION_USE_NAMED_LIST: False,
     }
-    init_database()
-    ensure_default_family()
+    if is_cloud_database():
+        db_error = bootstrap_database()
+        if db_error:
+            st.session_state["database_error"] = db_error
+    else:
+        init_database()
+        ensure_default_family()
+
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -1013,6 +1019,17 @@ def main() -> None:
     inject_app_styles()
     inject_pwa_meta()
     init_session_state()
+
+    db_error = st.session_state.get("database_error")
+    if db_error:
+        st.markdown(f"### {APP_ICON} Database setup needed")
+        st.error("The app could not connect to Supabase.")
+        st.markdown(db_error)
+        st.info(
+            "After updating **Secrets**, wait ~1 minute for the app to reboot, then refresh this page."
+        )
+        st.stop()
+
     render_sidebar()
     render_hero()
 

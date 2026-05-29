@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import parse_qs, quote, unquote, urlparse, urlunparse
 
-from constants import DATABASE_FILE, ENV_DATABASE_URL, ENV_SUPABASE_REGION
+from constants import DATABASE_FILE
+
+# Env var names (defined here so deploy works if constants.py is older on Cloud)
+ENV_DATABASE_URL = "DATABASE_URL"
+ENV_SUPABASE_REGION = "SUPABASE_REGION"
 
 _SCHEMA_VERSION = 1
 

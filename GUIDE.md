@@ -8,15 +8,17 @@
 
 1. Go to [supabase.com](https://supabase.com) → New project (free).
 2. Wait for the database to provision.
-3. **Project Settings → Database → Connection string → URI** (choose **Session pooler**).
-4. Copy the URI (replace `[YOUR-PASSWORD]` with your DB password).
-5. Streamlit Cloud → your app → **Settings → Secrets**:
+3. Click **Connect** → choose **Session pooler** (NOT “Direct connection”).
+4. Copy the **URI** — host must be `aws-0-….pooler.supabase.com`, user `postgres.YOUR_PROJECT_REF`.
+5. Streamlit Cloud → **Settings → Secrets**:
 
 ```toml
-DATABASE_URL = "postgresql://postgres.xxxx:YOUR_PASSWORD@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
+DATABASE_URL = "postgresql://postgres.YOUR_PROJECT_REF:YOUR_PASSWORD@aws-0-ap-south-1.pooler.supabase.com:5432/postgres"
 ```
 
-6. Save → app reboots. Top of app shows **Cloud DB — all phones synced**.
+6. Save → app reboots. Top shows **Cloud DB — all phones synced**.
+
+**Why Direct fails:** `db….supabase.co:5432` is IPv6-only; Streamlit Cloud is IPv4-only. Use Session pooler URI from Supabase (the app also auto-converts Direct URLs when possible).
 
 Now families, lists, gift counts, and scans are **shared live** across every staff phone.
 
