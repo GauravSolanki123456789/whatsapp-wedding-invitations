@@ -45,7 +45,10 @@ SESSION_LAST_COMPONENT_SCAN = "last_component_scan"
 SESSION_USE_NAMED_LIST = "use_named_guest_list"
 SESSION_SCANNER_STAFF_NAME = "scanner_staff_name"
 
-# URL query param set by live QR scanner (auto guest lookup)
+SESSION_DB_BOOTSTRAPPED = "db_bootstrapped"
+SESSION_ACTIVE_NAV_TAB = "active_nav_tab"
+
+# URL query param from live QR scanner
 QUERY_PARAM_SCAN_TOKEN = "scan_token"
 
 # Send modes

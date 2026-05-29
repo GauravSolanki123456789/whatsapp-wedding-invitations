@@ -320,13 +320,16 @@ class DbConnection:
 def db_connection() -> Iterator[DbConnection]:
     postgres = is_cloud_database()
     raw: Any
+    pool_putconn = None
     if postgres:
         import psycopg2
         from psycopg2.extras import RealDictCursor
 
         url = get_database_url()
         assert url is not None
-        raw = psycopg2.connect(url, cursor_factory=RealDictCursor, connect_timeout=15)
+        pool = _get_postgres_pool(url, RealDictCursor)
+        raw = pool.getconn()
+        pool_putconn = pool
     else:
         path = get_sqlite_path()
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -341,23 +344,108 @@ def db_connection() -> Iterator[DbConnection]:
         connection.rollback()
         raise
     finally:
-        raw.close()
+        if pool_putconn is not None:
+            pool_putconn.putconn(raw)
+        else:
+            raw.close()
+
+
+def _get_postgres_pool(url: str, cursor_factory: Any) -> Any:
+    """Reuse connections to Supabase — avoids ~300ms connect per click."""
+    import streamlit as st
+
+    @st.cache_resource
+    def _pool(_url: str) -> Any:
+        from psycopg2 import pool as pg_pool
+
+        return pg_pool.ThreadedConnectionPool(
+            minconn=1,
+            maxconn=6,
+            dsn=_url,
+            cursor_factory=cursor_factory,
+            connect_timeout=10,
+        )
+
+    return _pool(url)
+
+
+def _run_schema_init(connection: DbConnection) -> None:
+    if is_cloud_database():
+        for statement in _POSTGRES_STATEMENTS:
+            connection.execute(statement)
+    else:
+        connection._conn.executescript(_SQLITE_SCHEMA)  # noqa: SLF001
+
+    row = connection.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+    if row is None:
+        connection.execute(
+            "INSERT INTO schema_version (version) VALUES (?)",
+            (_SCHEMA_VERSION,),
+        )
 
 
 def init_database() -> None:
-    with db_connection() as connection:
-        if is_cloud_database():
-            for statement in _POSTGRES_STATEMENTS:
-                connection.execute(statement)
-        else:
-            connection._conn.executescript(_SQLITE_SCHEMA)  # noqa: SLF001
+    """Create tables if needed — cached once per app worker (not every tab click)."""
+    import streamlit as st
 
-        row = connection.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
-        if row is None:
-            connection.execute(
-                "INSERT INTO schema_version (version) VALUES (?)",
-                (_SCHEMA_VERSION,),
-            )
+    @st.cache_resource
+    def _schema_ready() -> bool:
+        with db_connection() as connection:
+            _run_schema_init(connection)
+        return True
+
+    _schema_ready()
+
+
+def ensure_default_family() -> int:
+    with db_connection() as connection:
+        row = connection.execute("SELECT id FROM family ORDER BY id LIMIT 1").fetchone()
+        if row:
+            return int(row["id"])
+        now = _utc_now()
+        cursor = connection.execute(
+            "INSERT INTO family (name, created_at) VALUES (?, ?)",
+            ("Default Family", now),
+        )
+        new_id = cursor.lastrowid
+        assert new_id is not None
+        return int(new_id)
+
+
+def bootstrap_database() -> str | None:
+    """Initialize database; return error message for UI or None on success."""
+    try:
+        init_database()
+        ensure_default_family()
+        return None
+    except Exception as exc:
+        return explain_database_error(exc)
+
+
+def ensure_database_ready(session_state: dict) -> str | None:
+    """Run DB setup once per browser session — not on every tab switch."""
+    from constants import SESSION_DB_BOOTSTRAPPED
+
+    if session_state.get(SESSION_DB_BOOTSTRAPPED):
+        return session_state.get("database_error")
+
+    if not is_cloud_database():
+        try:
+            init_database()
+            ensure_default_family()
+            session_state[SESSION_DB_BOOTSTRAPPED] = True
+            return None
+        except Exception as exc:
+            err = explain_database_error(exc)
+            session_state["database_error"] = err
+            return err
+
+    err = bootstrap_database()
+    if err:
+        session_state["database_error"] = err
+    else:
+        session_state[SESSION_DB_BOOTSTRAPPED] = True
+    return err
 
 
 def explain_database_error(exc: BaseException) -> str:
@@ -395,16 +483,6 @@ def explain_database_error(exc: BaseException) -> str:
     return "\n".join(lines)
 
 
-def bootstrap_database() -> str | None:
-    """Initialize database; return error message for UI or None on success."""
-    try:
-        init_database()
-        ensure_default_family()
-        return None
-    except Exception as exc:
-        return explain_database_error(exc)
-
-
 def row_to_dict(row: Any | None) -> dict[str, Any] | None:
     if row is None:
         return None
@@ -413,16 +491,10 @@ def row_to_dict(row: Any | None) -> dict[str, Any] | None:
     return dict(row)
 
 
-def ensure_default_family() -> int:
-    with db_connection() as connection:
-        row = connection.execute("SELECT id FROM family ORDER BY id LIMIT 1").fetchone()
-        if row:
-            return int(row["id"])
-        now = _utc_now()
-        cursor = connection.execute(
-            "INSERT INTO family (name, created_at) VALUES (?, ?)",
-            ("Default Family", now),
-        )
-        new_id = cursor.lastrowid
-        assert new_id is not None
-        return int(new_id)
+def invalidate_families_cache() -> None:
+    try:
+        import streamlit as st
+
+        st.session_state.pop("families_cache", None)
+    except Exception:
+        pass

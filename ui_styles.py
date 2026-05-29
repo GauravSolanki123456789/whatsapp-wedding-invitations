@@ -148,6 +148,26 @@ def inject_app_styles() -> None:
             padding: 0.4rem 0.55rem !important;
           }
 
+          div[data-testid="stRadio"] > div {
+            flex-wrap: wrap;
+            gap: 0.2rem;
+          }
+
+          div[data-testid="stRadio"] label {
+            background: var(--muted);
+            border-radius: 10px;
+            padding: 0.35rem 0.55rem !important;
+            margin: 0.1rem !important;
+            font-weight: 600 !important;
+            font-size: 0.82rem !important;
+          }
+
+          div[data-testid="stRadio"] label[data-checked="true"],
+          div[data-testid="stRadio"] label:has(input:checked) {
+            background: #f8ece6;
+            border: 1px solid var(--brand);
+          }
+
           div[data-testid="stVerticalBlockBorderWrapper"] {
             border-radius: var(--radius) !important;
             border-color: var(--border) !important;

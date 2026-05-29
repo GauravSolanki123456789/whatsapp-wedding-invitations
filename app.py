@@ -85,7 +85,7 @@ from whatsapp_service import (
     start_send_session,
     stop_send_session,
 )
-from database import bootstrap_database, ensure_default_family, init_database, is_cloud_database
+from database import ensure_database_ready
 from family_service import get_family
 from named_guest_list_service import get_guest_list_members, members_to_mobile_numbers
 from ui_pages import (
@@ -137,13 +137,9 @@ def init_session_state() -> None:
         SESSION_ACTIVE_GUEST_LIST_ID: None,
         SESSION_USE_NAMED_LIST: False,
     }
-    if is_cloud_database():
-        db_error = bootstrap_database()
-        if db_error:
-            st.session_state["database_error"] = db_error
-    else:
-        init_database()
-        ensure_default_family()
+    db_error = ensure_database_ready(st.session_state)
+    if db_error:
+        st.session_state["database_error"] = db_error
 
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1044,52 +1040,34 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-    (
-        tab_guests,
-        tab_lists,
-        tab_compose,
-        tab_send,
-        tab_gifts,
-        tab_scan,
-        tab_reports,
-        tab_settings,
-    ) = st.tabs(
-        ["Guests", "Lists", "Compose", "Send", "Gifts", "Scan", "Reports", "Settings"]
+    nav_labels = ["Guests", "Lists", "Compose", "Send", "Gifts", "Scan", "Reports", "Settings"]
+    active_tab = st.radio(
+        "Section",
+        nav_labels,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="main_nav_tab",
     )
 
-    with tab_guests:
-        with st.container(border=True):
+    with st.container(border=True):
+        if active_tab == "Guests":
             render_upload_section()
             st.divider()
             render_guest_editor()
-
-    with tab_lists:
-        with st.container(border=True):
+        elif active_tab == "Lists":
             render_lists_tab(family_id)
-
-    with tab_compose:
-        with st.container(border=True):
+        elif active_tab == "Compose":
             render_message_section()
-
-    with tab_send:
-        with st.container(border=True):
+        elif active_tab == "Send":
             render_send_section()
-        render_send_log()
-
-    with tab_gifts:
-        with st.container(border=True):
+            render_send_log()
+        elif active_tab == "Gifts":
             render_functions_tab(family_id, family_name)
-
-    with tab_scan:
-        with st.container(border=True):
+        elif active_tab == "Scan":
             render_scan_tab()
-
-    with tab_reports:
-        with st.container(border=True):
+        elif active_tab == "Reports":
             render_reports_tab(family_id)
-
-    with tab_settings:
-        with st.container(border=True):
+        elif active_tab == "Settings":
             render_families_tab(family_id)
             st.divider()
             render_group_section()

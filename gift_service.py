@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 
-from database import _utc_now, db_connection, init_database, row_to_dict
+from database import _utc_now, db_connection, row_to_dict
 from constants import (
     GIFT_QUANTITY_COLUMN,
     GUEST_NAME_COLUMN,
@@ -19,7 +19,6 @@ from utils import normalize_mobile_number
 
 
 def list_functions(family_id: int) -> list[dict]:
-    init_database()
     with db_connection() as connection:
         rows = connection.execute(
             """

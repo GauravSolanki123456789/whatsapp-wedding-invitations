@@ -7,13 +7,12 @@ from typing import Any
 
 import pandas as pd
 
-from database import _utc_now, db_connection, init_database, row_to_dict
+from database import _utc_now, db_connection, row_to_dict
 from constants import GUEST_NAME_COLUMN, GIFT_QUANTITY_COLUMN, MOBILE_NUMBER_COLUMN
 from utils import normalize_mobile_number
 
 
 def list_guest_lists(family_id: int) -> list[dict]:
-    init_database()
     with db_connection() as connection:
         rows = connection.execute(
             """

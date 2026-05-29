@@ -4,6 +4,9 @@
 [server]
 headless = true
 
+[runner]
+fastReruns = true
+
 [theme]
 primaryColor = "#B76E79"
 backgroundColor = "#FFFBF7"
