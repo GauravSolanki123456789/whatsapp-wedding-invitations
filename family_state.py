@@ -9,6 +9,7 @@ from constants import (
     SESSION_FLASH_MESSAGE,
     SESSION_FLASH_TYPE,
     SESSION_MAIN_NAV_TAB,
+    SESSION_PENDING_NAV_TAB,
 )
 
 
@@ -122,7 +123,15 @@ def render_flash() -> None:
 
 
 def go_to_tab(tab_name: str) -> None:
-    st.session_state[SESSION_MAIN_NAV_TAB] = tab_name
+    """Schedule tab change before widgets render on the next rerun."""
+    st.session_state[SESSION_PENDING_NAV_TAB] = tab_name
+
+
+def apply_pending_nav() -> None:
+    """Apply a pending tab switch — call once at start of main(), before st.radio."""
+    pending = st.session_state.pop(SESSION_PENDING_NAV_TAB, None)
+    if pending:
+        st.session_state[SESSION_MAIN_NAV_TAB] = pending
 
 
 def sync_family_selector_widget(families: list[dict]) -> None:

@@ -48,6 +48,7 @@ SESSION_SCANNER_STAFF_NAME = "scanner_staff_name"
 SESSION_DB_BOOTSTRAPPED = "db_bootstrapped"
 SESSION_ACTIVE_NAV_TAB = "active_nav_tab"
 SESSION_MAIN_NAV_TAB = "main_nav_tab"
+SESSION_PENDING_NAV_TAB = "pending_nav_tab"
 SESSION_FLASH_MESSAGE = "ui_flash_message"
 SESSION_FLASH_TYPE = "ui_flash_type"
 

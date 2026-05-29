@@ -28,6 +28,7 @@ from constants import (
     DOCUMENT_EXTENSIONS,
     GROUP_MODE_AUTO,
     GROUP_MODE_QUICK,
+    GUEST_NAME_COLUMN,
     IMAGE_EXTENSIONS,
     MANUAL_SEND_LOG_FILE,
     MOBILE_NUMBER_COLUMN,
@@ -88,6 +89,8 @@ from whatsapp_service import (
 from database import ensure_database_ready
 from family_service import get_family
 from family_state import (
+    apply_pending_nav,
+    get_active_guest_list_id,
     get_family_guest_df,
     get_family_message,
     get_family_manual_sent,
@@ -95,12 +98,14 @@ from family_state import (
     mark_family_manual_sent,
     render_flash,
     reset_family_manual_sent,
+    set_active_guest_list_id,
     set_family_guest_df,
     set_family_message,
     set_flash,
+    set_use_named_list_for_family,
     use_named_list_for_family,
 )
-from named_guest_list_service import get_guest_list_members, members_to_mobile_numbers
+from named_guest_list_service import get_guest_list_members, list_guest_lists, members_to_mobile_numbers
 from ui_pages import (
     render_database_status,
     render_families_tab,
@@ -230,6 +235,61 @@ def render_upload_section(family_id: int, family_name: str) -> None:
     st.markdown('<p class="section-title">Upload guest list</p>', unsafe_allow_html=True)
     st.caption(f"Guests for **{family_name}** — other families keep their own numbers.")
 
+    saved_lists = list_guest_lists(family_id)
+    if saved_lists:
+        st.markdown(
+            '<p class="section-title" style="font-size:0.92rem;margin-top:0.75rem">Use a saved list</p>',
+            unsafe_allow_html=True,
+        )
+        list_options = {
+            f"{row['name']} ({row['member_count']} guests)": int(row["id"]) for row in saved_lists
+        }
+        pick_key = f"guests_saved_list_pick_{family_id}"
+        if pick_key not in st.session_state:
+            active_ids = [int(row["id"]) for row in saved_lists]
+            active_id = get_active_guest_list_id(family_id, active_ids)
+            id_to_label = {list_id: label for label, list_id in list_options.items()}
+            st.session_state[pick_key] = id_to_label.get(int(active_id), next(iter(list_options)))
+
+        picked_label = st.selectbox(
+            "Saved lists for this family",
+            options=list(list_options.keys()),
+            key=pick_key,
+        )
+        picked_list_id = list_options[picked_label]
+        picked_name = next(row["name"] for row in saved_lists if row["id"] == picked_list_id)
+
+        load_col, send_col = st.columns(2)
+        with load_col:
+            if st.button("Load into review", use_container_width=True, key=f"load_list_{family_id}"):
+                members = get_guest_list_members(picked_list_id)
+                if members.empty:
+                    set_flash(f"**{picked_name}** is empty — upload Excel in Lists first.", "warning")
+                else:
+                    set_family_guest_df(family_id, members)
+                    set_active_guest_list_id(family_id, picked_list_id)
+                    set_flash(f"Loaded **{len(members)}** guests from **{picked_name}**.")
+                st.rerun()
+        with send_col:
+            if st.button("Use for Send", use_container_width=True, key=f"use_list_send_{family_id}"):
+                members = get_guest_list_members(picked_list_id)
+                if members.empty:
+                    set_flash(f"**{picked_name}** is empty — upload Excel in Lists first.", "warning")
+                else:
+                    set_active_guest_list_id(family_id, picked_list_id)
+                    set_use_named_list_for_family(family_id, True)
+                    set_flash(
+                        f"Send will use **{picked_name}** ({len(members)} guests). "
+                        "Go to **Send** when ready."
+                    )
+                st.rerun()
+
+        st.divider()
+
+    st.markdown(
+        '<p class="section-title" style="font-size:0.92rem">Or upload new Excel</p>',
+        unsafe_allow_html=True,
+    )
     uploaded_file = st.file_uploader(
         "Choose an Excel file (.xlsx)",
         type=["xlsx"],
@@ -273,22 +333,29 @@ def render_guest_editor(family_id: int) -> None:
 
     guest_list: pd.DataFrame = get_family_guest_df(family_id)
     if guest_list.empty:
-        st.info("Upload Excel or add numbers below.")
+        st.info("Upload Excel, load a saved list, or add numbers below.")
         guest_list = pd.DataFrame({MOBILE_NUMBER_COLUMN: [""]})
+
+    column_config = {
+        MOBILE_NUMBER_COLUMN: st.column_config.TextColumn(
+            "Mobile number",
+            help="Include country code, e.g. +919876543210",
+            required=True,
+            width="large",
+        ),
+    }
+    if GUEST_NAME_COLUMN in guest_list.columns:
+        column_config[GUEST_NAME_COLUMN] = st.column_config.TextColumn(
+            "Guest name",
+            width="medium",
+        )
 
     edited_guest_list = st.data_editor(
         guest_list,
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
-        column_config={
-            MOBILE_NUMBER_COLUMN: st.column_config.TextColumn(
-                "Mobile number",
-                help="Include country code, e.g. +919876543210",
-                required=True,
-                width="large",
-            ),
-        },
+        column_config=column_config,
         key=f"guest_data_editor_{family_id}",
     )
 
@@ -1145,6 +1212,7 @@ def main() -> None:
         )
 
     nav_labels = ["Guests", "Lists", "Compose", "Send", "Gifts", "Scan", "Reports", "Settings"]
+    apply_pending_nav()
     if SESSION_MAIN_NAV_TAB not in st.session_state:
         st.session_state[SESSION_MAIN_NAV_TAB] = "Guests"
     active_tab = st.radio(

@@ -57,37 +57,111 @@ def normalize_mobile_number(raw_value: object, country_code: str) -> str | None:
     return None
 
 
+    return None
+
+
+def _column_name_matches(column: object, candidates: list[str]) -> bool:
+    key = str(column).strip().lower().replace(" ", "_")
+    return key in candidates or any(candidate in key for candidate in candidates)
+
+
+def detect_mobile_column(dataframe: pd.DataFrame, country_code: str):
+    """Pick the column that most likely contains phone numbers."""
+    for column in dataframe.columns:
+        if _column_name_matches(
+            column,
+            ["mobile_number", "mobile", "phone", "contact", "whatsapp", "number", "cell"],
+        ):
+            return column
+
+    best_column = None
+    best_score = 0
+    for column in dataframe.columns:
+        score = sum(
+            1
+            for value in dataframe[column].head(100)
+            if normalize_mobile_number(value, country_code)
+        )
+        if score > best_score:
+            best_score = score
+            best_column = column
+    return best_column if best_score > 0 else None
+
+
+def detect_name_column(dataframe: pd.DataFrame, mobile_column) -> object | None:
+    if mobile_column is None:
+        return None
+    for column in dataframe.columns:
+        if column == mobile_column:
+            continue
+        if _column_name_matches(column, ["guest_name", "name", "guest", "invitee"]):
+            return column
+    for column in dataframe.columns:
+        if column == mobile_column:
+            continue
+        return column
+    return None
+
+
+def parse_guest_rows_from_excel(
+    file_bytes: bytes,
+    country_code: str,
+) -> tuple[list[dict[str, str]], str | None]:
+    """
+    Parse Excel into guest rows with mobile_number (+ optional guest_name).
+    Handles S.No | Name | Mobile layouts and header/no-header files.
+    """
+    from constants import GUEST_NAME_COLUMN
+
+    buffer = io.BytesIO(file_bytes)
+    dataframe = pd.read_excel(buffer, engine="openpyxl", header=0)
+    if dataframe.empty:
+        return [], "The Excel file is empty."
+
+    mobile_column = detect_mobile_column(dataframe, country_code)
+    if mobile_column is None:
+        buffer.seek(0)
+        dataframe = pd.read_excel(buffer, engine="openpyxl", header=None)
+        mobile_column = detect_mobile_column(dataframe, country_code)
+
+    if mobile_column is None:
+        return [], "Could not find a column with mobile numbers."
+
+    name_column = detect_name_column(dataframe, mobile_column)
+    members: list[dict[str, str]] = []
+    for _, row in dataframe.iterrows():
+        mobile = normalize_mobile_number(row[mobile_column], country_code)
+        if not mobile:
+            continue
+        guest_name = ""
+        if name_column is not None and pd.notna(row[name_column]):
+            raw_name = str(row[name_column]).strip()
+            if raw_name.lower() not in {"nan", "none"} and not re.fullmatch(r"\d+\.?\d*", raw_name):
+                guest_name = raw_name
+        members.append({GUEST_NAME_COLUMN: guest_name, MOBILE_NUMBER_COLUMN: mobile})
+
+    seen: set[str] = set()
+    unique: list[dict[str, str]] = []
+    for member in members:
+        number = member[MOBILE_NUMBER_COLUMN]
+        if number not in seen:
+            seen.add(number)
+            unique.append(member)
+
+    if not unique:
+        return [], "No valid mobile numbers found in the Excel file."
+    return unique, None
+
+
 def extract_mobile_numbers_from_excel(
     uploaded_file: bytes,
     country_code: str,
 ) -> pd.DataFrame:
-    """Read the second column of an Excel file and return a guest-list DataFrame."""
-    file_buffer = io.BytesIO(uploaded_file)
-    dataframe = pd.read_excel(file_buffer, engine="openpyxl", header=None)
-
-    if dataframe.shape[1] < 2:
-        raise ValueError(
-            "The Excel file must have at least two columns. "
-            "Column 1 is ignored; column 2 should contain mobile numbers."
-        )
-
-    second_column = dataframe.iloc[:, 1]
-    normalized_numbers: list[str] = []
-
-    for raw_value in second_column:
-        mobile_number = normalize_mobile_number(raw_value, country_code)
-        if mobile_number:
-            normalized_numbers.append(mobile_number)
-
-    # Remove duplicates while preserving order
-    seen: set[str] = set()
-    unique_numbers: list[str] = []
-    for number in normalized_numbers:
-        if number not in seen:
-            seen.add(number)
-            unique_numbers.append(number)
-
-    return pd.DataFrame({MOBILE_NUMBER_COLUMN: unique_numbers})
+    """Read an Excel file and return a guest-list DataFrame (mobile numbers)."""
+    members, error = parse_guest_rows_from_excel(uploaded_file, country_code)
+    if error:
+        raise ValueError(error)
+    return pd.DataFrame({MOBILE_NUMBER_COLUMN: [row[MOBILE_NUMBER_COLUMN] for row in members]})
 
 
 def guest_list_from_dataframe(dataframe: pd.DataFrame) -> list[str]:

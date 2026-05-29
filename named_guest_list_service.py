@@ -121,50 +121,15 @@ def import_excel_to_guest_list(
     country_code: str,
     family_id: int | None = None,
 ) -> tuple[int, str | None]:
-    buffer = io.BytesIO(file_bytes)
-    dataframe = pd.read_excel(buffer, engine="openpyxl", header=0)
+    from utils import parse_guest_rows_from_excel
 
-    members: list[dict[str, str]] = []
-    columns_lower = [str(column).strip().lower() for column in dataframe.columns]
+    members, error = parse_guest_rows_from_excel(file_bytes, country_code)
+    if error:
+        return 0, error
 
-    if MOBILE_NUMBER_COLUMN in columns_lower or "mobile" in " ".join(columns_lower):
-        name_col = _find_column(dataframe, ["guest_name", "name", "guest"])
-        mobile_col = _find_column(dataframe, ["mobile_number", "mobile", "phone", "number"])
-        qty_col = _find_column(dataframe, ["gift_quantity", "quantity", "gifts", "qty"])
-        for _, row in dataframe.iterrows():
-            raw_mobile = row[mobile_col] if mobile_col else None
-            mobile = normalize_mobile_number(raw_mobile, country_code)
-            if not mobile:
-                continue
-            guest_name = str(row[name_col]).strip() if name_col and pd.notna(row[name_col]) else ""
-            if guest_name.lower() in {"nan", "none"}:
-                guest_name = ""
-            members.append({GUEST_NAME_COLUMN: guest_name, MOBILE_NUMBER_COLUMN: mobile})
-    else:
-        if dataframe.shape[1] < 2:
-            return 0, "Excel needs at least 2 columns (name optional in col 1, mobile in col 2)."
-        for _, row in dataframe.iterrows():
-            raw_name = row.iloc[0] if dataframe.shape[1] >= 2 else ""
-            raw_mobile = row.iloc[1]
-            mobile = normalize_mobile_number(raw_mobile, country_code)
-            if not mobile:
-                continue
-            guest_name = str(raw_name).strip() if pd.notna(raw_name) else ""
-            if guest_name.lower() in {"nan", "none"}:
-                guest_name = ""
-            members.append({GUEST_NAME_COLUMN: guest_name, MOBILE_NUMBER_COLUMN: mobile})
-
-    seen: set[str] = set()
-    unique: list[dict[str, str]] = []
-    for member in members:
-        number = member[MOBILE_NUMBER_COLUMN]
-        if number not in seen:
-            seen.add(number)
-            unique.append(member)
-
-    replace_guest_list_members(guest_list_id, unique)
+    replace_guest_list_members(guest_list_id, members)
     invalidate_guest_lists_cache(family_id)
-    return len(unique), None
+    return len(members), None
 
 
 def members_to_mobile_numbers(members_df: pd.DataFrame, country_code: str) -> list[str]:
@@ -180,10 +145,3 @@ def members_to_mobile_numbers(members_df: pd.DataFrame, country_code: str) -> li
             numbers.append(normalized)
     return numbers
 
-
-def _find_column(dataframe: pd.DataFrame, candidates: list[str]) -> str | None:
-    for column in dataframe.columns:
-        key = str(column).strip().lower().replace(" ", "_")
-        if key in candidates or any(candidate in key for candidate in candidates):
-            return column
-    return None
