@@ -8,9 +8,9 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
-from urllib.parse import parse_qs, urlparse, urlunparse
+from urllib.parse import parse_qs, quote, unquote, urlparse, urlunparse
 
-from constants import DATABASE_FILE, ENV_DATABASE_URL
+from constants import DATABASE_FILE, ENV_DATABASE_URL, ENV_SUPABASE_REGION
 
 _SCHEMA_VERSION = 1
 
@@ -164,6 +164,44 @@ def _normalize_postgres_url(url: str) -> str:
     return url
 
 
+def _supabase_project_ref(host: str) -> str | None:
+    if host.startswith("db.") and host.endswith(".supabase.co"):
+        return host[len("db.") : -len(".supabase.co")]
+    return None
+
+
+def _fix_supabase_url_for_ipv4(url: str) -> str:
+    """
+    Streamlit Cloud is IPv4-only. Supabase *direct* URLs (db.xxx.supabase.co:5432)
+    are IPv6-only — rewrite to Session pooler (IPv4-compatible).
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    project_ref = _supabase_project_ref(host)
+    if not project_ref or "pooler.supabase.com" in host:
+        return url
+
+    region = os.environ.get(ENV_SUPABASE_REGION, "ap-south-1").strip() or "ap-south-1"
+    pooler_host = f"aws-0-{region}.pooler.supabase.com"
+
+    username = unquote(parsed.username or "postgres")
+    password = unquote(parsed.password or "")
+    if username == "postgres":
+        username = f"postgres.{project_ref}"
+
+    netloc = f"{quote(username, safe='')}:{quote(password, safe='')}@{pooler_host}:5432"
+    query = parse_qs(parsed.query)
+    if "sslmode" not in query:
+        query["sslmode"] = ["require"]
+    new_query = "&".join(f"{key}={values[0]}" for key, values in query.items())
+    return urlunparse(parsed._replace(netloc=netloc, scheme="postgresql", query=new_query))
+
+
+def _prepare_postgres_url(url: str) -> str:
+    url = _normalize_postgres_url(url)
+    return _fix_supabase_url_for_ipv4(url)
+
+
 def get_database_url() -> str | None:
     url = os.environ.get(ENV_DATABASE_URL, "").strip()
     if not url:
@@ -171,7 +209,7 @@ def get_database_url() -> str | None:
     if url.startswith("sqlite:///"):
         return url
     if url.startswith("postgresql://") or url.startswith("postgres://"):
-        return _normalize_postgres_url(url)
+        return _prepare_postgres_url(url)
     return None
 
 
@@ -255,7 +293,12 @@ class DbConnection:
         if self._postgres:
             adapted_sql = sql.replace("?", "%s")
             stripped = sql.strip().upper()
-            if stripped.startswith("INSERT") and "RETURNING" not in stripped:
+            # schema_version has no id column — only (version) PK
+            if (
+                stripped.startswith("INSERT")
+                and "RETURNING" not in stripped
+                and "INTO SCHEMA_VERSION" not in stripped
+            ):
                 adapted_sql = adapted_sql.rstrip().rstrip(";") + " RETURNING id"
                 insert_returning = True
         cursor = self._conn.cursor()
@@ -279,7 +322,7 @@ def db_connection() -> Iterator[DbConnection]:
 
         url = get_database_url()
         assert url is not None
-        raw = psycopg2.connect(url, cursor_factory=RealDictCursor)
+        raw = psycopg2.connect(url, cursor_factory=RealDictCursor, connect_timeout=15)
     else:
         path = get_sqlite_path()
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -313,6 +356,51 @@ def init_database() -> None:
             )
 
 
+def explain_database_error(exc: BaseException) -> str:
+    raw_url = os.environ.get(ENV_DATABASE_URL, "")
+    is_direct_supabase = "db." in raw_url and ".supabase.co" in raw_url
+    is_pooler = "pooler.supabase.com" in raw_url
+
+    lines = [
+        "**Could not connect to the cloud database.**",
+        "",
+        "Streamlit Cloud needs Supabase **Session pooler** (IPv4), not **Direct connection** (IPv6).",
+    ]
+    if is_direct_supabase and not is_pooler:
+        lines.extend(
+            [
+                "",
+                "Your secret uses **Direct connection** (`db….supabase.co:5432`). The app auto-converts this, but if it still fails:",
+                "",
+                "1. Supabase → **Connect** → choose **Session pooler** (not Direct).",
+                "2. Copy the **URI** — host should be `aws-0-….pooler.supabase.com`.",
+                "3. User should be `postgres.YOUR_PROJECT_REF` (not plain `postgres`).",
+                "4. Paste into Streamlit **Secrets** as `DATABASE_URL`.",
+                "",
+                "If your region is not India, also add to Secrets:",
+                "`SUPABASE_REGION = \"your-region\"` (e.g. `us-east-1`).",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "Check: password correct, Supabase project is running, and `DATABASE_URL` uses Session pooler URI from Supabase **Connect**.",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def bootstrap_database() -> str | None:
+    """Initialize database; return error message for UI or None on success."""
+    try:
+        init_database()
+        ensure_default_family()
+        return None
+    except Exception as exc:
+        return explain_database_error(exc)
+
+
 def row_to_dict(row: Any | None) -> dict[str, Any] | None:
     if row is None:
         return None
@@ -322,7 +410,6 @@ def row_to_dict(row: Any | None) -> dict[str, Any] | None:
 
 
 def ensure_default_family() -> int:
-    init_database()
     with db_connection() as connection:
         row = connection.execute("SELECT id FROM family ORDER BY id LIMIT 1").fetchone()
         if row:
