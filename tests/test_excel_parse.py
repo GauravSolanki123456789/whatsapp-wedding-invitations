@@ -34,6 +34,19 @@ class ExcelParseTests(unittest.TestCase):
         self.assertEqual(members[0][GUEST_NAME_COLUMN], "Arvind Bothra")
         self.assertTrue(members[0][MOBILE_NUMBER_COLUMN].startswith("+91"))
 
+    def test_no_guest_name_mobile_columns(self) -> None:
+        file_bytes = self._excel_bytes(
+            [
+                ["No", "guest_name", "mobile_number"],
+                [1, "INDRA BAI JI RANKA", "9848545840"],
+                [2, "NAVRATAN JI RANKA", "9393144433"],
+            ]
+        )
+        members, error = parse_guest_rows_from_excel(file_bytes, "+91")
+        self.assertIsNone(error)
+        self.assertEqual(members[0][GUEST_NAME_COLUMN], "INDRA BAI JI RANKA")
+        self.assertEqual(members[1][GUEST_NAME_COLUMN], "NAVRATAN JI RANKA")
+
     def test_skips_serial_numbers_as_names(self) -> None:
         file_bytes = self._excel_bytes(
             [

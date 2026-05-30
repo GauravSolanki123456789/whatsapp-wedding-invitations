@@ -7,6 +7,7 @@ APP_TAGLINE = "Families · lists · invites · gift QR · scan"
 # Data column names — consistent across Excel, DB, UI, and reports
 MOBILE_NUMBER_COLUMN = "mobile_number"
 GUEST_NAME_COLUMN = "guest_name"
+GUEST_NO_COLUMN = "No"
 GIFT_QUANTITY_COLUMN = "gift_quantity"
 
 # QR payload prefix (encoded in guest QR images)

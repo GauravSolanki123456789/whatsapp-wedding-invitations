@@ -168,12 +168,12 @@ def family_guest_df_key(family_id: int) -> str:
 def get_family_guest_df(family_id: int):
     import pandas as pd
 
-    from constants import MOBILE_NUMBER_COLUMN
+    from constants import GUEST_NAME_COLUMN, MOBILE_NUMBER_COLUMN
 
     key = family_guest_df_key(family_id)
     df = st.session_state.get(key)
     if df is None:
-        df = pd.DataFrame(columns=[MOBILE_NUMBER_COLUMN])
+        df = pd.DataFrame(columns=[GUEST_NAME_COLUMN, MOBILE_NUMBER_COLUMN])
         st.session_state[key] = df
     return df
 

@@ -166,7 +166,7 @@ def render_families_tab(family_id: int) -> None:
 
 def render_lists_tab(family_id: int, family_name: str) -> None:
     st.markdown('<p class="section-title">Saved guest lists</p>', unsafe_allow_html=True)
-    st.caption(f"Lists for **{family_name}** only — switching family shows that family's lists.")
+    st.caption(f"Lists for **{family_name}** only — Excel format: **No · guest_name · mobile_number**.")
 
     col_a, col_b = st.columns(2)
     with col_a:

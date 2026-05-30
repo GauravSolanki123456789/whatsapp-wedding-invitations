@@ -296,7 +296,7 @@ def render_upload_section(family_id: int, family_name: str) -> None:
         "Choose an Excel file (.xlsx)",
         type=["xlsx"],
         key=f"upload_{family_id}_{st.session_state[SESSION_FILE_UPLOAD_KEY]}",
-        help="Column 2 = mobile numbers. Column 1 is ignored.",
+        help="Use columns: No, guest_name, mobile_number (download sample in Lists tab).",
     )
 
     if uploaded_file is not None:
@@ -335,10 +335,17 @@ def render_guest_editor(family_id: int) -> None:
 
     guest_list: pd.DataFrame = get_family_guest_df(family_id)
     if guest_list.empty:
-        st.info("Upload Excel, load a saved list, or add numbers below.")
-        guest_list = pd.DataFrame({MOBILE_NUMBER_COLUMN: [""]})
+        st.info("Upload Excel, load a saved list, or add guests below.")
+        guest_list = pd.DataFrame({GUEST_NAME_COLUMN: [""], MOBILE_NUMBER_COLUMN: [""]})
+    elif GUEST_NAME_COLUMN not in guest_list.columns:
+        guest_list = guest_list.copy()
+        guest_list.insert(0, GUEST_NAME_COLUMN, "")
 
     column_config = {
+        GUEST_NAME_COLUMN: st.column_config.TextColumn(
+            "Guest name",
+            width="medium",
+        ),
         MOBILE_NUMBER_COLUMN: st.column_config.TextColumn(
             "Mobile number",
             help="Include country code, e.g. +919876543210",
@@ -346,11 +353,6 @@ def render_guest_editor(family_id: int) -> None:
             width="large",
         ),
     }
-    if GUEST_NAME_COLUMN in guest_list.columns:
-        column_config[GUEST_NAME_COLUMN] = st.column_config.TextColumn(
-            "Guest name",
-            width="medium",
-        )
 
     edited_guest_list = st.data_editor(
         guest_list,
@@ -358,6 +360,7 @@ def render_guest_editor(family_id: int) -> None:
         use_container_width=True,
         hide_index=True,
         column_config=column_config,
+        column_order=[GUEST_NAME_COLUMN, MOBILE_NUMBER_COLUMN],
         key=f"guest_data_editor_{family_id}",
     )
 
@@ -377,7 +380,10 @@ def render_guest_editor(family_id: int) -> None:
     )
 
     if st.button("Clear list", use_container_width=True):
-        set_family_guest_df(family_id, pd.DataFrame(columns=[MOBILE_NUMBER_COLUMN]))
+        set_family_guest_df(
+            family_id,
+            pd.DataFrame({GUEST_NAME_COLUMN: [""], MOBILE_NUMBER_COLUMN: [""]}),
+        )
         st.session_state[SESSION_FILE_UPLOAD_KEY] += 1
         st.session_state.pop(f"last_guest_upload_token_{family_id}", None)
         set_flash("Guest list cleared.", "info")
@@ -406,12 +412,19 @@ def render_group_section(family_id: int) -> None:
     st.session_state[SESSION_GROUP_NAME] = group_name
 
     if group_name.strip() and guests:
+        named = [guest for guest in guests if (guest.get(GUEST_NAME_COLUMN) or "").strip()]
+        sample_guest = named[0] if named else guests[0]
         sample_name = format_vcard_contact_name(
-            guests[0].get(GUEST_NAME_COLUMN, ""),
+            sample_guest.get(GUEST_NAME_COLUMN, ""),
             group_name,
             1,
         )
         st.caption(f"Contacts import as: **{sample_name}**, etc.")
+        if not named:
+            st.warning(
+                "Guest names missing — re-save your Excel in **Lists** using columns "
+                "**No · guest_name · mobile_number**, then download .vcf again."
+            )
 
     group_options = [GROUP_MODE_QUICK]
     if auto_send_available():

@@ -88,6 +88,25 @@ def detect_mobile_column(dataframe: pd.DataFrame, country_code: str):
     return best_column if best_score > 0 else None
 
 
+def _is_serial_column(column: object) -> bool:
+    key = str(column).strip().lower().replace(" ", "_").replace(".", "_")
+    serial_keys = {
+        "no",
+        "s_no",
+        "sno",
+        "sr",
+        "sr_no",
+        "serial",
+        "index",
+        "id",
+        "#",
+        "num",
+        "sl",
+        "sl_no",
+    }
+    return key in serial_keys or key.endswith("_no") or key.startswith("s_no")
+
+
 def detect_name_column(dataframe: pd.DataFrame, mobile_column) -> object | None:
     if mobile_column is None:
         return None
@@ -97,7 +116,7 @@ def detect_name_column(dataframe: pd.DataFrame, mobile_column) -> object | None:
         if _column_name_matches(column, ["guest_name", "name", "guest", "invitee"]):
             return column
     for column in dataframe.columns:
-        if column == mobile_column:
+        if column == mobile_column or _is_serial_column(column):
             continue
         return column
     return None
@@ -153,15 +172,30 @@ def parse_guest_rows_from_excel(
     return unique, None
 
 
+def parse_guest_dataframe_from_excel(
+    uploaded_file: bytes,
+    country_code: str,
+) -> pd.DataFrame:
+    """Read Excel and return a DataFrame with guest_name + mobile_number."""
+    from constants import GUEST_NAME_COLUMN
+
+    members, error = parse_guest_rows_from_excel(uploaded_file, country_code)
+    if error:
+        raise ValueError(error)
+    return pd.DataFrame(
+        {
+            GUEST_NAME_COLUMN: [row[GUEST_NAME_COLUMN] for row in members],
+            MOBILE_NUMBER_COLUMN: [row[MOBILE_NUMBER_COLUMN] for row in members],
+        }
+    )
+
+
 def extract_mobile_numbers_from_excel(
     uploaded_file: bytes,
     country_code: str,
 ) -> pd.DataFrame:
-    """Read an Excel file and return a guest-list DataFrame (mobile numbers)."""
-    members, error = parse_guest_rows_from_excel(uploaded_file, country_code)
-    if error:
-        raise ValueError(error)
-    return pd.DataFrame({MOBILE_NUMBER_COLUMN: [row[MOBILE_NUMBER_COLUMN] for row in members]})
+    """Backward-compatible alias — returns guest_name + mobile_number columns."""
+    return parse_guest_dataframe_from_excel(uploaded_file, country_code)
 
 
 def guest_list_from_dataframe(dataframe: pd.DataFrame) -> list[str]:
