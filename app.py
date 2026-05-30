@@ -63,8 +63,10 @@ from constants import (
 )
 from group_contacts import (
     build_guest_vcard,
+    format_vcard_contact_name,
     group_creation_summary_rows,
     numbers_for_clipboard,
+    vcard_download_filename,
 )
 from guest_store import load_guest_list
 from guided_send import cooldown_remaining, next_pending_guest, start_cooldown
@@ -385,7 +387,8 @@ def render_guest_editor(family_id: int) -> None:
 def render_group_section(family_id: int) -> None:
     st.markdown('<p class="section-title">WhatsApp group</p>', unsafe_allow_html=True)
 
-    mobile_numbers = collect_mobile_numbers(family_id)
+    guests = collect_guest_contacts(family_id)
+    mobile_numbers = [guest[MOBILE_NUMBER_COLUMN] for guest in guests]
     guest_count = len(mobile_numbers)
     invalid_count = count_invalid_numbers(mobile_numbers)
 
@@ -395,11 +398,20 @@ def render_group_section(family_id: int) -> None:
     )
 
     group_name = st.text_input(
-        "Group name",
+        "Contact list label",
         value=st.session_state.get(SESSION_GROUP_NAME, DEFAULT_GROUP_NAME),
-        placeholder="e.g. Chandana's Wedding Guests",
+        placeholder="e.g. Rankalist",
+        help="Appended to each contact name in the .vcf file so lists stay separate on your phone.",
     )
     st.session_state[SESSION_GROUP_NAME] = group_name
+
+    if group_name.strip() and guests:
+        sample_name = format_vcard_contact_name(
+            guests[0].get(GUEST_NAME_COLUMN, ""),
+            group_name,
+            1,
+        )
+        st.caption(f"Contacts import as: **{sample_name}**, etc.")
 
     group_options = [GROUP_MODE_QUICK]
     if auto_send_available():
@@ -427,21 +439,23 @@ def render_group_section(family_id: int) -> None:
         )
 
     if group_mode == GROUP_MODE_QUICK:
-        render_quick_group_panel(mobile_numbers, group_name, invalid_count)
+        render_quick_group_panel(guests, group_name, invalid_count)
     else:
         render_auto_group_panel(mobile_numbers, group_name, invalid_count, guest_count)
 
 
 def render_quick_group_panel(
-    mobile_numbers: list[str],
+    guests: list[dict[str, str]],
     group_name: str,
     invalid_count: int,
 ) -> None:
+    mobile_numbers = [guest[MOBILE_NUMBER_COLUMN] for guest in guests]
+    label = group_name.strip() or "your list label"
     st.markdown(
-        """
+        f"""
         <div class="notice-box tip-box">
-          <strong>Phone:</strong> download contacts → import → WhatsApp → New group →
-          select <em>Wedding Guest</em> → create.
+          <strong>Phone:</strong> download contacts → import on phone → WhatsApp → New group →
+          search <em>{label}</em> → select all matching contacts → create group.
         </div>
         """,
         unsafe_allow_html=True,
@@ -456,13 +470,13 @@ def render_quick_group_panel(
         st.error(error)
         return
 
-    vcard_bytes = build_guest_vcard(mobile_numbers).encode("utf-8")
+    vcard_bytes = build_guest_vcard(guests, list_label=group_name).encode("utf-8")
     clipboard_text = numbers_for_clipboard(mobile_numbers)
 
     st.download_button(
         label="Download guest contacts (.vcf)",
         data=vcard_bytes,
-        file_name="wedding_guest_contacts.vcf",
+        file_name=vcard_download_filename(group_name),
         mime="text/vcard",
         use_container_width=True,
     )
@@ -1026,26 +1040,79 @@ def render_auto_send_panel(
 
 
 def collect_mobile_numbers(family_id: int) -> list[str]:
+    return [guest[MOBILE_NUMBER_COLUMN] for guest in collect_guest_contacts(family_id)]
+
+
+def collect_guest_contacts(family_id: int) -> list[dict[str, str]]:
+    """Return guest_name + mobile_number rows for the active family guest source."""
     from family_state import get_active_guest_list_id
     from named_guest_list_service import list_guest_lists
 
-    if use_named_list_for_family(family_id):
-        lists = list_guest_lists(family_id)
-        list_ids = [int(row["id"]) for row in lists]
-        list_id = get_active_guest_list_id(family_id, list_ids)
-        if list_id:
-            members = get_guest_list_members(list_id)
-            numbers = members_to_mobile_numbers(members, st.session_state[SESSION_COUNTRY_CODE])
-            if numbers:
-                return numbers
+    country_code = st.session_state[SESSION_COUNTRY_CODE]
+
+    lists = list_guest_lists(family_id)
+    list_ids = [int(row["id"]) for row in lists]
+    list_id = get_active_guest_list_id(family_id, list_ids) if list_ids else None
+
+    if use_named_list_for_family(family_id) and list_id:
+        members = get_guest_list_members(list_id)
+        contacts = _contacts_from_members_df(members, country_code)
+        if contacts:
+            return contacts
+
+    if list_id:
+        members = get_guest_list_members(list_id)
+        saved_contacts = _contacts_from_members_df(members, country_code)
+        if saved_contacts and any(contact.get(GUEST_NAME_COLUMN) for contact in saved_contacts):
+            return saved_contacts
 
     guest_list = get_family_guest_df(family_id)
-    country_code = st.session_state[SESSION_COUNTRY_CODE]
-    normalized_rows = []
-    for raw_value in guest_list_from_dataframe(guest_list):
-        normalized = normalize_mobile_number(raw_value, country_code) or raw_value
-        normalized_rows.append(normalized)
-    return [number for number in normalized_rows if number]
+    if guest_list.empty:
+        return []
+
+    contacts: list[dict[str, str]] = []
+    seen: set[str] = set()
+    has_name_column = GUEST_NAME_COLUMN in guest_list.columns
+
+    for _, row in guest_list.iterrows():
+        raw_mobile = row.get(MOBILE_NUMBER_COLUMN, "")
+        mobile = normalize_mobile_number(raw_mobile, country_code) or str(raw_mobile).strip()
+        if not mobile or mobile in seen:
+            continue
+        seen.add(mobile)
+
+        guest_name = ""
+        if has_name_column:
+            raw_name = row.get(GUEST_NAME_COLUMN, "")
+            if raw_name is not None and str(raw_name).strip().lower() not in {"nan", "none", ""}:
+                guest_name = str(raw_name).strip()
+
+        contacts.append({GUEST_NAME_COLUMN: guest_name, MOBILE_NUMBER_COLUMN: mobile})
+
+    return contacts
+
+
+def _contacts_from_members_df(members, country_code: str) -> list[dict[str, str]]:
+    contacts: list[dict[str, str]] = []
+    seen: set[str] = set()
+    if members is None or members.empty:
+        return contacts
+
+    for _, row in members.iterrows():
+        raw_mobile = row.get(MOBILE_NUMBER_COLUMN, "")
+        mobile = normalize_mobile_number(raw_mobile, country_code) or str(raw_mobile).strip()
+        if not mobile or mobile in seen:
+            continue
+        seen.add(mobile)
+
+        guest_name = ""
+        raw_name = row.get(GUEST_NAME_COLUMN, "")
+        if raw_name is not None and str(raw_name).strip().lower() not in {"nan", "none", ""}:
+            guest_name = str(raw_name).strip()
+
+        contacts.append({GUEST_NAME_COLUMN: guest_name, MOBILE_NUMBER_COLUMN: mobile})
+
+    return contacts
 
 
 def run_send_flow(family_id: int, test_only: bool = False) -> None:
